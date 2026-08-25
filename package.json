@@ -1,0 +1,35 @@
+{
+  "name": "dead-domain-pinger",
+  "version": "0.1.0",
+  "description": "GitHub composite action that probes filter list domains and removes the dead ones",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FilteringDev/dead-domain-pinger"
+  },
+  "bugs": {
+    "url": "https://github.com/FilteringDev/dead-domain-pinger/issues"
+  },
+  "homepage": "https://github.com/FilteringDev/dead-domain-pinger",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "ci": "tsx index.ts",
+    "lint": "oxlint",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "@adguard/agtree": "^4.1.1",
+    "@structured-world/structured-public-domains": "^0.0.25",
+    "@typescriptprime/securereq": "^2.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "oxlint": "^1.79.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}

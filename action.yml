@@ -1,0 +1,76 @@
+name: 'Dead Domain Pinger'
+author: 'PiQuark6046 and contributors'
+description: 'Probes the domains referenced by AdGuard-style filter list rules and removes the ones that are dead'
+
+inputs:
+  filter-root:
+    description: 'Directory (relative to the workspace) to scan for filter list files'
+    required: false
+    default: '.'
+  file-extension:
+    description: 'File extension used by filter list files'
+    required: false
+    default: '.txt'
+  max-candidates:
+    description: 'Maximum number of domains to probe in a single run'
+    required: false
+    default: '50'
+  state-directory:
+    description: 'Directory (relative to the workspace) used to persist state, report and PR body files'
+    required: false
+    default: 'dead-domain-state'
+  dry-run:
+    description: 'Probe domains but do not write any file changes'
+    required: false
+    default: 'false'
+
+outputs:
+  has_changes:
+    description: 'Whether any filter list file was changed (always false in dry-run mode)'
+    value: ${{ steps.run.outputs.has_changes }}
+  dead_domains:
+    description: 'JSON array of domains judged dead in this run'
+    value: ${{ steps.run.outputs.dead_domains }}
+  changed_files:
+    description: 'JSON array of filter list files that were changed'
+    value: ${{ steps.run.outputs.changed_files }}
+  probed_count:
+    description: 'Number of domains actually probed in this run'
+    value: ${{ steps.run.outputs.probed_count }}
+  rate_limited:
+    description: 'Whether probing stopped early because of a Globalping rate limit'
+    value: ${{ steps.run.outputs.rate_limited }}
+  warning_count:
+    description: 'Number of warnings collected while evaluating probe results'
+    value: ${{ steps.run.outputs.warning_count }}
+  report_path:
+    description: 'Workspace-relative path to the generated Markdown report'
+    value: ${{ steps.run.outputs.report_path }}
+  pr_body_path:
+    description: 'Workspace-relative path to the generated pull request body'
+    value: ${{ steps.run.outputs.pr_body_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install pnpm
+      run: npm install -g pnpm
+      shell: bash
+
+    - name: Install dependencies
+      run: pnpm install --no-lockfile
+      shell: bash
+      working-directory: ${{ github.action_path }}
+
+    - name: Run dead domain pinger
+      id: run
+      env:
+        CI_WORKSPACE_PATH: ${{ github.workspace }}
+        FILTER_ROOT: ${{ inputs.filter-root }}
+        FILE_EXTENSION: ${{ inputs.file-extension }}
+        MAX_CANDIDATES: ${{ inputs.max-candidates }}
+        STATE_DIRECTORY: ${{ inputs.state-directory }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: pnpm run ci
+      shell: bash
+      working-directory: ${{ github.action_path }}
