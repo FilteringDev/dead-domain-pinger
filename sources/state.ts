@@ -1,4 +1,5 @@
 import InitSqlJs from 'sql.js'
+import { randomUUID } from 'node:crypto'
 import * as Fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as Path from 'node:path'
@@ -172,6 +173,10 @@ export function RecordVerdict(
 /** Drops entries for domains that no longer exist in the filter lists, then persists the SQLite state. */
 export async function SaveState(StateFilePath: string, State: DeadDomainState, KnownDomains: Set<string>): Promise<void> {
   const Pruned = CreateEmptyState()
+  const TemporaryStateFilePath = Path.join(
+    Path.dirname(StateFilePath),
+    `.${Path.basename(StateFilePath)}.${randomUUID()}.tmp`
+  )
 
   for (const [Domain, Entry] of Object.entries(State.Domains)) {
     if (KnownDomains.has(Domain)) {
@@ -218,11 +223,14 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
     }
 
     Database.exec('commit')
-    Fs.writeFileSync(StateFilePath, Database.export())
+    Fs.writeFileSync(TemporaryStateFilePath, Database.export())
+    Fs.renameSync(TemporaryStateFilePath, StateFilePath)
   } catch (ErrorValue) {
     try {
       Database.exec('rollback')
     } catch {}
+
+    Fs.rmSync(TemporaryStateFilePath, { force: true })
 
     throw ErrorValue
   } finally {
