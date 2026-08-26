@@ -6,6 +6,7 @@ export const GlobalpingApiBaseUrl = 'https://api.globalping.io/v1'
 /**
  * Globalping applies a per-IP hourly credit budget to anonymous callers.
  * Runs are capped well below it because GitHub-hosted runners share their egress addresses.
+ * This ceiling only applies without an API token; authenticated callers may raise it.
  */
 export const MaxMeasurementsPerRun = 50
 
@@ -50,7 +51,7 @@ function Delay(DurationMs: number): Promise<void> {
   return new Promise(Resolve => setTimeout(Resolve, DurationMs))
 }
 
-async function CreateMeasurement(Domain: string): Promise<string> {
+async function CreateMeasurement(Domain: string, ApiToken?: string): Promise<string> {
   const Payload = JSON.stringify({
     type: 'http',
     target: Domain,
@@ -65,7 +66,10 @@ async function CreateMeasurement(Domain: string): Promise<string> {
 
   const Response = await SimpleSecureReq.Request(new URL(`${GlobalpingApiBaseUrl}/measurements`), {
     HttpMethod: 'POST',
-    HttpHeaders: { 'content-type': 'application/json' },
+    HttpHeaders: {
+      'content-type': 'application/json',
+      ...(ApiToken ? { authorization: `Bearer ${ApiToken}` } : {})
+    },
     Payload,
     ExpectedAs: 'JSON',
     FollowRedirects: true,
@@ -84,9 +88,10 @@ async function CreateMeasurement(Domain: string): Promise<string> {
   return CreatedMeasurementSchema.parse(Response.Body).id
 }
 
-async function FetchMeasurement(MeasurementId: string): Promise<GlobalpingMeasurement> {
+async function FetchMeasurement(MeasurementId: string, ApiToken?: string): Promise<GlobalpingMeasurement> {
   const Response = await SimpleSecureReq.Request(new URL(`${GlobalpingApiBaseUrl}/measurements/${MeasurementId}`), {
     HttpMethod: 'GET',
+    HttpHeaders: ApiToken ? { authorization: `Bearer ${ApiToken}` } : {},
     ExpectedAs: 'JSON',
     FollowRedirects: true,
     MaxRedirects: 3,
@@ -105,14 +110,14 @@ async function FetchMeasurement(MeasurementId: string): Promise<GlobalpingMeasur
 }
 
 /** Creates an HTTP measurement restricted to Korean probes and waits for it to settle. */
-export async function ProbeDomain(Domain: string): Promise<GlobalpingMeasurement> {
-  const MeasurementId = await CreateMeasurement(Domain)
+export async function ProbeDomain(Domain: string, ApiToken?: string): Promise<GlobalpingMeasurement> {
+  const MeasurementId = await CreateMeasurement(Domain, ApiToken)
   const Deadline = Date.now() + MeasurementTimeoutMs
 
   for (;;) {
     await Delay(MeasurementPollIntervalMs)
 
-    const Measurement = await FetchMeasurement(MeasurementId)
+    const Measurement = await FetchMeasurement(MeasurementId, ApiToken)
     if (Measurement.status !== 'in-progress') {
       return Measurement
     }

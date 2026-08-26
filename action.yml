@@ -12,9 +12,13 @@ inputs:
     required: false
     default: '.txt'
   max-candidates:
-    description: 'Maximum number of domains to probe in a single run'
+    description: 'Maximum number of domains to probe in a single run (may only exceed 50 when globalping-api-token is set)'
     required: false
     default: '50'
+  globalping-api-token:
+    description: 'Globalping API token, e.g. secrets.GLOBALPING_API_TOKEN (optional; raises the anonymous rate limit and unlocks max-candidates above 50)'
+    required: false
+    default: ''
   state-directory:
     description: 'Directory (relative to the workspace) used to persist state, report and PR body files'
     required: false
@@ -69,6 +73,7 @@ runs:
         FILTER_ROOT: ${{ inputs.filter-root }}
         FILE_EXTENSION: ${{ inputs.file-extension }}
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
+        GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         STATE_DIRECTORY: ${{ inputs.state-directory }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: pnpm run ci

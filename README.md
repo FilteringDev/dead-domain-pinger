@@ -22,6 +22,8 @@ delete a rule.
     max-candidates: '50'
     state-directory: dead-domain-state
     dry-run: 'false'
+    # Optional: raises the anonymous rate limit and allows max-candidates above 50.
+    globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
 ```
 
 ## Inputs
@@ -30,9 +32,10 @@ delete a rule.
 | --- | --- | --- |
 | `filter-root` | `.` | Directory (relative to the workspace) to scan for filter list files |
 | `file-extension` | `.txt` | File extension used by filter list files |
-| `max-candidates` | `50` | Maximum number of domains to probe in a single run |
+| `max-candidates` | `50` | Maximum number of domains to probe in a single run (may only exceed 50 when `globalping-api-token` is set) |
 | `state-directory` | `dead-domain-state` | Directory used to persist state, report and PR body files |
 | `dry-run` | `false` | Probe domains but do not write any file changes |
+| `globalping-api-token` | `''` | Globalping API token (optional; raises the anonymous rate limit and unlocks `max-candidates` above 50) |
 
 ## Outputs
 

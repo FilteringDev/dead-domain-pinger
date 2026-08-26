@@ -19,11 +19,21 @@ const Env = await Zod.object({
   FILTER_ROOT: Zod.string().nonempty().default('.'),
   FILE_EXTENSION: Zod.string().nonempty().default('.txt'),
   STATE_DIRECTORY: Zod.string().nonempty().default('dead-domain-state'),
-  MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun))
-    .transform(Value => Number(Value))
-    .refine(Value => Number.isInteger(Value) && Value > 0 && Value <= MaxMeasurementsPerRun,
-      `MAX_CANDIDATES must be an integer between 1 and ${MaxMeasurementsPerRun}`)
-}).strip().parseAsync(Process.env)
+  GLOBALPING_API_TOKEN: Zod.string().default(''),
+  MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun)).transform(Value => Number(Value))
+}).strip()
+  .superRefine((Value, Context) => {
+    if (!Number.isInteger(Value.MAX_CANDIDATES) || Value.MAX_CANDIDATES <= 0) {
+      Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: 'MAX_CANDIDATES must be a positive integer' })
+      return
+    }
+
+    // Above the anonymous quota, Globalping requires an API token to authenticate the higher limit.
+    if (Value.MAX_CANDIDATES > MaxMeasurementsPerRun && Value.GLOBALPING_API_TOKEN.length === 0) {
+      Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: `MAX_CANDIDATES may only exceed ${MaxMeasurementsPerRun} when globalping-api-token is set` })
+    }
+  })
+  .parseAsync(Process.env)
 
 const WorkingDirectory = Process.env.CI_WORKSPACE_PATH ?? Process.cwd()
 const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
@@ -65,7 +75,7 @@ for (const Candidate of SelectedCandidates) {
   }
 
   try {
-    const Measurement = await ProbeDomain(Candidate.Domain)
+    const Measurement = await ProbeDomain(Candidate.Domain, Env.GLOBALPING_API_TOKEN || undefined)
     const { Verdict, Reason, Warnings, SameDomainRedirects } = EvaluateMeasurement(Candidate.Domain, Measurement)
 
     // A kept redirect means the domain moved on its own; treat it as freshly modified so it
