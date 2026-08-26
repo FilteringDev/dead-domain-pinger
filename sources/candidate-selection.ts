@@ -1,4 +1,4 @@
-import type { DomainCandidate, DomainOccurrence } from './types.ts'
+import type { DomainCandidate, DomainOccurrence, ProbeWorkItem } from './types.ts'
 import { GetLastCheckedAt, GetModifiedAtOverride, type DeadDomainState } from './state.ts'
 import { GetDomainModifiedTimes } from './domain-history.ts'
 
@@ -67,4 +67,31 @@ export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Pr
 
 export function SelectOldestDomains(Candidates: DomainCandidate[], MaxCandidates: number): DomainCandidate[] {
   return Candidates.slice(0, Math.max(0, MaxCandidates))
+}
+
+/** Returns persisted HTTP follow-ups first, then the least-recently-touched HTTPS candidates. */
+export function SelectProbeWork(Candidates: DomainCandidate[], State: DeadDomainState, MaxCandidates: number): ProbeWorkItem[] {
+  const MaxWorkItems = Math.max(0, MaxCandidates)
+  const CandidatesByDomain = new Map(Candidates.map(Candidate => [Candidate.Domain, Candidate]))
+  const PriorityWork = Object.entries(State.PendingProbes)
+    .filter(([SourceDomain]) => CandidatesByDomain.has(SourceDomain))
+    .sort(([Left], [Right]) => Left.localeCompare(Right))
+    .map(([SourceDomain, PendingProbe]) => ({
+      SourceDomain,
+      Target: PendingProbe.Target,
+      Protocol: 'HTTP' as const,
+      PriorityKind: PendingProbe.Kind
+    }))
+
+  const PendingDomains = new Set(PriorityWork.map(Work => Work.SourceDomain))
+  const NormalWork = Candidates
+    .filter(Candidate => !PendingDomains.has(Candidate.Domain))
+    .map(Candidate => ({
+      SourceDomain: Candidate.Domain,
+      Target: Candidate.Domain,
+      Protocol: 'HTTPS' as const,
+      PriorityKind: null
+    }))
+
+  return [...PriorityWork, ...NormalWork].slice(0, MaxWorkItems)
 }

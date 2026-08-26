@@ -12,13 +12,12 @@ inputs:
     required: false
     default: '.txt'
   max-candidates:
-    description: 'Maximum number of domains to probe in a single run (may only exceed 50 when globalping-api-token is set)'
+    description: 'Maximum number of probe jobs to run in a single workflow run, including queued HTTP follow-ups'
     required: false
     default: '50'
   globalping-api-token:
-    description: 'Globalping API token, e.g. secrets.GLOBALPING_API_TOKEN (optional; raises the anonymous rate limit and unlocks max-candidates above 50)'
-    required: false
-    default: ''
+    description: 'Required Globalping access token, e.g. secrets.GLOBALPING_API_TOKEN'
+    required: true
   state-directory:
     description: 'Directory (relative to the workspace) used to persist state, report and PR body files'
     required: false

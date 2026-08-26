@@ -4,7 +4,7 @@ import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
 import { BuildDomainCandidates } from '../sources/candidate-selection.ts'
-import { CreateEmptyState, GetModifiedAtOverride, LoadState, RecordVerdict, SaveState, StateFileName } from '../sources/state.ts'
+import { ClearPendingProbe, CreateEmptyState, GetModifiedAtOverride, GetPendingProbe, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from '../sources/state.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
 const Occurrences: DomainOccurrence[] = [
@@ -35,6 +35,15 @@ test('RecordVerdict stores no override when none was ever recorded', () => {
   assert.equal('ModifiedAtOverride' in State.Domains['old.example'], false)
 })
 
+test('pending probes can be queued and cleared independently from verdicts', () => {
+  const State = CreateEmptyState()
+  QueuePendingProbe(State, 'example.com', 'www.example.com', 'TryWwwHttp')
+
+  assert.deepEqual(GetPendingProbe(State, 'example.com'), { Target: 'www.example.com', Kind: 'TryWwwHttp' })
+  ClearPendingProbe(State, 'example.com')
+  assert.equal(GetPendingProbe(State, 'example.com'), null)
+})
+
 test('An override pushes a domain to the back of the queue', async () => {
   const State = CreateEmptyState()
   RecordVerdict(State, 'redirected.example', 'Unknown', 500, [], 9000)
@@ -57,6 +66,8 @@ test('SQLite state persists a pruned state round trip', async () => {
   const State = CreateEmptyState()
   RecordVerdict(State, 'kept.example', 'Dead', 2000, ['warning'], 3000)
   RecordVerdict(State, 'removed.example', 'Alive', 1000, [])
+  QueuePendingProbe(State, 'kept.example', 'kept.example', 'RetryOriginalHttp')
+  QueuePendingProbe(State, 'removed.example', 'www.removed.example', 'TryWwwHttp')
 
   await SaveState(StateFilePath, State, new Set(['kept.example']))
   const LoadedState = await LoadState(StateFilePath)
@@ -67,6 +78,9 @@ test('SQLite state persists a pruned state round trip', async () => {
     LastVerdict: 'Dead',
     LastWarnings: ['warning'],
     ModifiedAtOverride: 3000
+  })
+  assert.deepEqual(LoadedState.PendingProbes, {
+    'kept.example': { Target: 'kept.example', Kind: 'RetryOriginalHttp' }
   })
 })
 

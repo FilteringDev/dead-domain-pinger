@@ -14,15 +14,34 @@ export type DomainCandidate = {
   Occurrences: DomainOccurrence[]
 }
 
+export type ProbeProtocol = 'HTTP' | 'HTTPS'
+
+export type PriorityProbeKind = 'RetryOriginalHttp' | 'TryWwwHttp'
+
+export type ProbeWorkItem = {
+  SourceDomain: string
+  Target: string
+  Protocol: ProbeProtocol
+  PriorityKind: PriorityProbeKind | null
+}
+
+export type PendingProbe = {
+  Target: string
+  Kind: PriorityProbeKind
+}
+
 export type DomainVerdict = 'Alive' | 'Dead' | 'Unknown'
 
 export type DomainProbeResult = {
   Domain: string
+  Target: string
+  Protocol: ProbeProtocol
   Verdict: DomainVerdict
   Reason: string
   Warnings: string[]
   SameDomainRedirects: string[]
   ModifiedAtOverride: number | null
+  NextProbe: PendingProbe | null
 }
 
 export type RuleChange = {

@@ -23,7 +23,6 @@ delete a rule.
     state-directory: dead-domain-state
     state-artifact-name: dead-domain-pinger-state
     dry-run: 'false'
-    # Optional: raises the anonymous rate limit and allows max-candidates above 50.
     globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
 ```
 
@@ -33,12 +32,34 @@ delete a rule.
 | --- | --- | --- |
 | `filter-root` | `.` | Directory (relative to the workspace) to scan for filter list files |
 | `file-extension` | `.txt` | File extension used by filter list files |
-| `max-candidates` | `50` | Maximum number of domains to probe in a single run (may only exceed 50 when `globalping-api-token` is set) |
+| `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
 | `state-directory` | `dead-domain-state` | Directory used to write the Markdown report and PR body files |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used to probe selected domains; when provided, it must be a positive integer |
 | `dry-run` | `false` | Probe domains but do not write any file changes |
-| `globalping-api-token` | `''` | Globalping API token (optional; raises the anonymous rate limit and unlocks `max-candidates` above 50) |
+| `globalping-api-token` | - | Required Globalping access token |
+
+## Globalping configuration
+
+An optional `dead-domain-pinger-config.json` at the repository root configures the Globalping
+measurement fields. Its `locations` and `limit` fields use the Globalping API request format:
+
+```json
+{
+  "locations": [{ "country": "KR", "tags": ["eyeball-network"] }],
+  "limit": 5
+}
+```
+
+When the file is absent, or either field is omitted, the action uses `limit: 5` and one
+`eyeball-network` probe each from the US, Europe, Korea, Japan, and India. An invalid config
+file fails the workflow instead of silently changing the requested measurement.
+
+HTTPS TLS failures are queued for an HTTP retry before ordinary candidates in the next workflow
+run. For a registrable-domain root with DNS or TLS failure, its HTTP retry is attempted first;
+if that also has DNS or TLS failure, `www.<domain>` is queued over HTTP for the following run.
+Each queued probe counts toward `max-candidates`, and a dead queued result removes the source
+filter-domain rule.
 
 ## Outputs
 

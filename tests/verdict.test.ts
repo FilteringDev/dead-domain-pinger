@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AreDomainsRelated, EvaluateMeasurement } from '../sources/verdict.ts'
+import { AreDomainsRelated, EvaluateMeasurement, IsRegistrableDomainRoot } from '../sources/verdict.ts'
 import type { GlobalpingMeasurement, GlobalpingProbeResult } from '../sources/globalping.ts'
 
 function Measurement(...Results: Partial<GlobalpingProbeResult>[]): GlobalpingMeasurement {
@@ -15,6 +15,11 @@ test('AreDomainsRelated compares registrable domains', () => {
   assert.ok(AreDomainsRelated('www.example.co.kr', 'shop.example.co.kr'))
   assert.equal(AreDomainsRelated('example.com', 'example.org'), false)
   assert.equal(AreDomainsRelated('example.co.kr', 'other.co.kr'), false)
+})
+
+test('IsRegistrableDomainRoot excludes subdomains', () => {
+  assert.equal(IsRegistrableDomainRoot('example.com'), true)
+  assert.equal(IsRegistrableDomainRoot('www.example.com'), false)
 })
 
 test('A redirect to a different registrable domain is dead', () => {
@@ -73,6 +78,16 @@ test('A TLS error reported only in the raw output is dead', () => {
   }))
 
   assert.equal(Result.Verdict, 'Dead')
+})
+
+test('A TLS handshake error reported in raw output is dead', () => {
+  const Result = EvaluateMeasurement('example.com', Measurement({
+    status: 'failed',
+    rawOutput: 'Error: TLS handshake failed with EPROTO'
+  }))
+
+  assert.equal(Result.Verdict, 'Dead')
+  assert.equal(Result.FailureKind, 'Tls')
 })
 
 test('A valid certificate does not trigger the TLS rule', () => {

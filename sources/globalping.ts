@@ -1,14 +1,11 @@
 import { SimpleSecureReq } from '@typescriptprime/securereq'
 import * as Zod from 'zod'
+import type { GlobalpingLocation } from './config.ts'
+import type { ProbeProtocol } from './types.ts'
 
 export const GlobalpingApiBaseUrl = 'https://api.globalping.io/v1'
 
-/**
- * Globalping applies a per-IP hourly credit budget to anonymous callers.
- * Runs are capped well below it because GitHub-hosted runners share their egress addresses.
- * This ceiling only applies without an API token; authenticated callers may raise it.
- */
-export const MaxMeasurementsPerRun = 50
+export const DefaultMaxCandidates = 50
 
 const MeasurementPollIntervalMs = 1500
 const MeasurementTimeoutMs = 60000
@@ -40,6 +37,14 @@ const MeasurementSchema = Zod.object({
 export type GlobalpingMeasurement = Zod.infer<typeof MeasurementSchema>
 export type GlobalpingProbeResult = GlobalpingMeasurement['results'][number]['result']
 
+export type GlobalpingProbeOptions = {
+  Target: string
+  Protocol: ProbeProtocol
+  Locations: GlobalpingLocation[]
+  Limit: number
+  ApiToken: string
+}
+
 export class GlobalpingRateLimitError extends Error {
   constructor(Message: string) {
     super(Message)
@@ -51,24 +56,28 @@ function Delay(DurationMs: number): Promise<void> {
   return new Promise(Resolve => setTimeout(Resolve, DurationMs))
 }
 
-async function CreateMeasurement(Domain: string, ApiToken?: string): Promise<string> {
-  const Payload = JSON.stringify({
+export function BuildMeasurementPayload(Options: GlobalpingProbeOptions): string {
+  return JSON.stringify({
     type: 'http',
-    target: Domain,
-    locations: [{ country: 'KR' }],
-    limit: 1,
+    target: Options.Target,
+    locations: Options.Locations,
+    limit: Options.Limit,
     inProgressUpdates: false,
     measurementOptions: {
-      protocol: 'HTTPS',
+      protocol: Options.Protocol,
       request: { method: 'GET', path: '/' }
     }
   })
+}
+
+async function CreateMeasurement(Options: GlobalpingProbeOptions): Promise<string> {
+  const Payload = BuildMeasurementPayload(Options)
 
   const Response = await SimpleSecureReq.Request(new URL(`${GlobalpingApiBaseUrl}/measurements`), {
     HttpMethod: 'POST',
     HttpHeaders: {
       'content-type': 'application/json',
-      ...(ApiToken ? { authorization: `Bearer ${ApiToken}` } : {})
+      authorization: `Bearer ${Options.ApiToken}`
     },
     Payload,
     ExpectedAs: 'JSON',
@@ -88,10 +97,10 @@ async function CreateMeasurement(Domain: string, ApiToken?: string): Promise<str
   return CreatedMeasurementSchema.parse(Response.Body).id
 }
 
-async function FetchMeasurement(MeasurementId: string, ApiToken?: string): Promise<GlobalpingMeasurement> {
+async function FetchMeasurement(MeasurementId: string, ApiToken: string): Promise<GlobalpingMeasurement> {
   const Response = await SimpleSecureReq.Request(new URL(`${GlobalpingApiBaseUrl}/measurements/${MeasurementId}`), {
     HttpMethod: 'GET',
-    HttpHeaders: ApiToken ? { authorization: `Bearer ${ApiToken}` } : {},
+    HttpHeaders: { authorization: `Bearer ${ApiToken}` },
     ExpectedAs: 'JSON',
     FollowRedirects: true,
     MaxRedirects: 3,
@@ -109,21 +118,21 @@ async function FetchMeasurement(MeasurementId: string, ApiToken?: string): Promi
   return MeasurementSchema.parse(Response.Body)
 }
 
-/** Creates an HTTP measurement restricted to Korean probes and waits for it to settle. */
-export async function ProbeDomain(Domain: string, ApiToken?: string): Promise<GlobalpingMeasurement> {
-  const MeasurementId = await CreateMeasurement(Domain, ApiToken)
+/** Creates an authenticated HTTP measurement and waits for it to settle. */
+export async function ProbeDomain(Options: GlobalpingProbeOptions): Promise<GlobalpingMeasurement> {
+  const MeasurementId = await CreateMeasurement(Options)
   const Deadline = Date.now() + MeasurementTimeoutMs
 
   for (;;) {
     await Delay(MeasurementPollIntervalMs)
 
-    const Measurement = await FetchMeasurement(MeasurementId, ApiToken)
+    const Measurement = await FetchMeasurement(MeasurementId, Options.ApiToken)
     if (Measurement.status !== 'in-progress') {
       return Measurement
     }
 
     if (Date.now() > Deadline) {
-      throw new Error(`Globalping measurement ${MeasurementId} for ${Domain} did not finish in time`)
+      throw new Error(`Globalping measurement ${MeasurementId} for ${Options.Target} did not finish in time`)
     }
   }
 }

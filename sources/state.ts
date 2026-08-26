@@ -3,7 +3,7 @@ import * as Fs from 'node:fs'
 import { createRequire } from 'node:module'
 import * as Path from 'node:path'
 import * as Zod from 'zod'
-import type { DomainVerdict } from './types.ts'
+import type { DomainVerdict, PendingProbe, PriorityProbeKind } from './types.ts'
 
 export const StateFileName = 'dead-domain-state.sqlite'
 
@@ -17,6 +17,10 @@ const StateSchema = Zod.object({
     LastVerdict: Zod.enum(['Alive', 'Dead', 'Unknown']),
     LastWarnings: Zod.array(Zod.string()).optional(),
     ModifiedAtOverride: Zod.number().optional()
+  })),
+  PendingProbes: Zod.record(Zod.string(), Zod.object({
+    Target: Zod.string().nonempty(),
+    Kind: Zod.enum(['RetryOriginalHttp', 'TryWwwHttp'])
   }))
 })
 
@@ -26,6 +30,12 @@ const DomainStateRowSchema = Zod.object({
   last_verdict: Zod.enum(['Alive', 'Dead', 'Unknown']),
   last_warnings_json: Zod.string().nullable(),
   modified_at_override: Zod.number().nullable()
+})
+
+const PendingProbeRowSchema = Zod.object({
+  source_domain: Zod.string(),
+  target: Zod.string().nonempty(),
+  kind: Zod.enum(['RetryOriginalHttp', 'TryWwwHttp'])
 })
 
 const WarningsSchema = Zod.array(Zod.string())
@@ -53,6 +63,7 @@ async function OpenStateDatabase(StateFilePath: string): Promise<InstanceType<(A
 function EnsureSchema(Database: InstanceType<(Awaited<ReturnType<typeof InitSqlJs>>)['Database']>): void {
   Database.exec('create table if not exists metadata (key text primary key, value text not null)')
   Database.exec('create table if not exists domain_state (domain text primary key, last_checked_at integer not null, last_verdict text not null, last_warnings_json text, modified_at_override integer)')
+  Database.exec('create table if not exists pending_probe (source_domain text primary key, target text not null, kind text not null)')
 
   Database.run('insert or replace into metadata (key, value) values (?, ?)', ['version', '1'])
 }
@@ -70,7 +81,7 @@ function ParseWarnings(Value: string | null): string[] {
 }
 
 export function CreateEmptyState(): DeadDomainState {
-  return { Version: 1, Domains: {} }
+  return { Version: 1, Domains: {}, PendingProbes: {} }
 }
 
 /** Reads the SQLite state carried over from the previous run; falls back to an empty state. */
@@ -99,6 +110,16 @@ export async function LoadState(StateFilePath: string): Promise<DeadDomainState>
         Statement.free()
       }
 
+      const PendingStatement = Database.prepare('select source_domain, target, kind from pending_probe order by source_domain')
+      try {
+        while (PendingStatement.step()) {
+          const Row = PendingProbeRowSchema.parse(PendingStatement.getAsObject())
+          State.PendingProbes[Row.source_domain] = { Target: Row.target, Kind: Row.kind }
+        }
+      } finally {
+        PendingStatement.free()
+      }
+
       return StateSchema.parse(State)
     } finally {
       Database.close()
@@ -115,6 +136,18 @@ export function GetLastCheckedAt(State: DeadDomainState, Domain: string): number
 /** Timestamp that supersedes the git history date of a domain, if one was recorded. */
 export function GetModifiedAtOverride(State: DeadDomainState, Domain: string): number {
   return State.Domains[Domain]?.ModifiedAtOverride ?? 0
+}
+
+export function GetPendingProbe(State: DeadDomainState, SourceDomain: string): PendingProbe | null {
+  return State.PendingProbes[SourceDomain] ?? null
+}
+
+export function QueuePendingProbe(State: DeadDomainState, SourceDomain: string, Target: string, Kind: PriorityProbeKind): void {
+  State.PendingProbes[SourceDomain] = { Target, Kind }
+}
+
+export function ClearPendingProbe(State: DeadDomainState, SourceDomain: string): void {
+  delete State.PendingProbes[SourceDomain]
 }
 
 export function RecordVerdict(
@@ -146,12 +179,19 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
     }
   }
 
+  for (const [SourceDomain, Probe] of Object.entries(State.PendingProbes)) {
+    if (KnownDomains.has(SourceDomain)) {
+      Pruned.PendingProbes[SourceDomain] = Probe
+    }
+  }
+
   const Database = await OpenStateDatabase(StateFilePath)
   Fs.mkdirSync(Path.dirname(StateFilePath), { recursive: true })
   try {
     EnsureSchema(Database)
     Database.exec('begin transaction')
     Database.exec('delete from domain_state')
+    Database.exec('delete from pending_probe')
 
     const Statement = Database.prepare('insert into domain_state (domain, last_checked_at, last_verdict, last_warnings_json, modified_at_override) values (?, ?, ?, ?, ?)')
     try {
@@ -166,6 +206,15 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
       }
     } finally {
       Statement.free()
+    }
+
+    const PendingStatement = Database.prepare('insert into pending_probe (source_domain, target, kind) values (?, ?, ?)')
+    try {
+      for (const [SourceDomain, Probe] of Object.entries(Pruned.PendingProbes).sort(([A], [B]) => A.localeCompare(B))) {
+        PendingStatement.run([SourceDomain, Probe.Target, Probe.Kind])
+      }
+    } finally {
+      PendingStatement.free()
     }
 
     Database.exec('commit')

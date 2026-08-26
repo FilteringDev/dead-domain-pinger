@@ -21,6 +21,9 @@ const AliveTimeoutPatterns = [
 ]
 
 const TlsFailurePatterns = [
+  /\b(?:TLS|SSL)\s+handshake\b/i,
+  /\bEPROTO\b/i,
+  /\bERR_SSL_[A-Z_]+\b/i,
   /\bCERT_HAS_EXPIRED\b/i,
   /\bCERT_NOT_YET_VALID\b/i,
   /\bDEPTH_ZERO_SELF_SIGNED_CERT\b/i,
@@ -37,6 +40,7 @@ export type MeasurementEvaluation = {
   Warnings: string[]
   /** Redirect targets sharing the probed domain's registrable domain — detected, never removed. */
   SameDomainRedirects: string[]
+  FailureKind: 'Dns' | 'Tls' | null
 }
 
 export function NormalizeHost(Host: string): string {
@@ -119,6 +123,12 @@ export function IsTlsValidationFailure(Result: GlobalpingProbeResult): boolean {
   return TlsFailurePatterns.some(Pattern => Pattern.test(GetProbeOutput(Result)))
 }
 
+export function IsRegistrableDomainRoot(Domain: string): boolean {
+  const Normalized = NormalizeHost(Domain)
+
+  return registrableDomain(Normalized) === Normalized
+}
+
 function GetTlsFailureDetail(Result: GlobalpingProbeResult): string {
   return Result.tls?.error ?? Result.tls?.authorizationError ?? 'certificate validation failed'
 }
@@ -135,7 +145,7 @@ export function EvaluateMeasurement(Domain: string, Measurement: GlobalpingMeasu
   const SameDomainRedirects: string[] = []
 
   if (Results.length === 0) {
-    return { Verdict: 'Unknown', Reason: 'No probe results were returned', Warnings, SameDomainRedirects }
+    return { Verdict: 'Unknown', Reason: 'No probe results were returned', Warnings, SameDomainRedirects, FailureKind: null }
   }
 
   const RedirectTargets = Results
@@ -155,7 +165,8 @@ export function EvaluateMeasurement(Domain: string, Measurement: GlobalpingMeasu
       Verdict: 'Dead',
       Reason: `TLS certificate validation failed on every probe (${GetTlsFailureDetail(Results[0])})`,
       Warnings,
-      SameDomainRedirects
+      SameDomainRedirects,
+      FailureKind: 'Tls'
     }
   }
 
@@ -167,23 +178,24 @@ export function EvaluateMeasurement(Domain: string, Measurement: GlobalpingMeasu
       Verdict: 'Dead',
       Reason: `Redirects to a different registrable domain (${ForeignRedirectTargets.join(', ')})`,
       Warnings,
-      SameDomainRedirects
+      SameDomainRedirects,
+      FailureKind: null
     }
   }
 
   if (Results.some(IsSuccessfulStatusCode)) {
-    return { Verdict: 'Alive', Reason: 'HTTP 2xx response', Warnings, SameDomainRedirects }
+    return { Verdict: 'Alive', Reason: 'HTTP 2xx response', Warnings, SameDomainRedirects, FailureKind: null }
   }
 
   if (Results.some(IsTimeout)) {
-    return { Verdict: 'Alive', Reason: 'HTTP request timed out', Warnings, SameDomainRedirects }
+    return { Verdict: 'Alive', Reason: 'HTTP request timed out', Warnings, SameDomainRedirects, FailureKind: null }
   }
 
   if (Results.every(IsDnsFailure)) {
-    return { Verdict: 'Dead', Reason: 'DNS name resolution failed on every probe', Warnings, SameDomainRedirects }
+    return { Verdict: 'Dead', Reason: 'DNS name resolution failed on every probe', Warnings, SameDomainRedirects, FailureKind: 'Dns' }
   }
 
   const StatusCodes = Results.map(Result => Result.statusCode ?? 'n/a').join(', ')
 
-  return { Verdict: 'Unknown', Reason: `Inconclusive probe outcome (status codes: ${StatusCodes})`, Warnings, SameDomainRedirects }
+  return { Verdict: 'Unknown', Reason: `Inconclusive probe outcome (status codes: ${StatusCodes})`, Warnings, SameDomainRedirects, FailureKind: null }
 }

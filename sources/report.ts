@@ -22,6 +22,7 @@ function BuildBody(Input: ReportInput): string[] {
   const DeadResults = Input.ProbeResults.filter(Result => Result.Verdict === 'Dead')
   const RedirectResults = Input.ProbeResults.filter(Result => Result.ModifiedAtOverride !== null)
   const Warnings = GetWarningEntries(Input.ProbeResults)
+  const FollowUps = Input.ProbeResults.filter(Result => Result.NextProbe !== null)
   const Lines: string[] = []
 
   Lines.push(
@@ -29,6 +30,7 @@ function BuildBody(Input: ReportInput): string[] {
     `- Probed domains: ${Input.ProbeResults.length} / ${Input.SelectedCount}${Input.RateLimited ? ' (stopped early: rate limited)' : ''}`,
     `- Dead domains: ${DeadResults.length}`,
     `- Redirects detected (kept): ${RedirectResults.length}`,
+    `- HTTP follow-ups queued: ${FollowUps.length}`,
     `- Warnings: ${Warnings.length}`,
     `- Changed files: ${Input.ChangedFiles.length}`,
     `- Modified rules: ${Input.ModifiedRules.length}`,
@@ -64,6 +66,12 @@ function BuildBody(Input: ReportInput): string[] {
     Lines.push('')
   }
 
+  if (FollowUps.length > 0) {
+    Lines.push('### HTTP follow-ups queued', '')
+    Lines.push(...FollowUps.map(Result => `- \`${Result.Domain}\` -> \`${Result.NextProbe?.Target}\` (${Result.NextProbe?.Kind})`))
+    Lines.push('')
+  }
+
   if (Input.RemovedRules.length > 0) {
     Lines.push('### Removed rules', '')
     Lines.push(...Input.RemovedRules.map(Change => `- \`${Change.Before}\` (${Change.FilePath}:${Change.LineNumber})`))
@@ -89,7 +97,7 @@ export function BuildReportMarkdown(Input: ReportInput): string {
 
 export function BuildPullRequestBody(Input: ReportInput): string {
   const Intro = [
-    'Domains probed over HTTP from Korean [Globalping](https://globalping.io) probes.',
+    'Domains probed using configured [Globalping](https://globalping.io) locations.',
     '',
     'A domain is treated as dead when DNS resolution fails, when TLS certificate validation fails,',
     'or when it redirects to a different registrable domain. Redirects that stay inside the same',

@@ -1,12 +1,15 @@
 import * as Os from 'node:os'
 import * as Process from 'node:process'
 import { Worker } from 'node:worker_threads'
-import type { DomainCandidate, DomainProbeResult } from './types.ts'
+import type { DomainProbeResult, ProbeWorkItem } from './types.ts'
+import type { GlobalpingLocation } from './config.ts'
 import type { ProbeWorkerData, ProbeWorkerResult } from './probe-worker.ts'
 
 export type ProbePoolOptions = {
-  Candidates: DomainCandidate[]
-  ApiToken?: string
+  WorkItems: ProbeWorkItem[]
+  ApiToken: string
+  Locations: GlobalpingLocation[]
+  Limit: number
   CheckedAt: number
   WorkerCount: number
   RunWorker?: ProbeRunner
@@ -46,20 +49,23 @@ function RunProbeWorker(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
   })
 }
 
-function UnknownResult(Domain: string, ErrorValue: unknown): DomainProbeResult {
+function UnknownResult(WorkItem: ProbeWorkItem, ErrorValue: unknown): DomainProbeResult {
   return {
-    Domain,
+    Domain: WorkItem.SourceDomain,
+    Target: WorkItem.Target,
+    Protocol: WorkItem.Protocol,
     Verdict: 'Unknown',
     Reason: ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue),
     Warnings: [],
     SameDomainRedirects: [],
-    ModifiedAtOverride: null
+    ModifiedAtOverride: null,
+    NextProbe: null
   }
 }
 
 export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promise<ProbePoolResult> {
   const RunWorker = Options.RunWorker ?? RunProbeWorker
-  const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Options.Candidates.length)
+  const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Options.WorkItems.length)
   const ProbeResultsByIndex: Array<DomainProbeResult | undefined> = []
   const ProbeFailedDomains = new Set<string>()
   let NextIndex = 0
@@ -68,18 +74,23 @@ export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promis
 
   const RunNext = async (): Promise<void> => {
     for (;;) {
-      if (RateLimited || NextIndex >= Options.Candidates.length) {
+      if (RateLimited || NextIndex >= Options.WorkItems.length) {
         return
       }
 
       const CandidateIndex = NextIndex
-      const Candidate = Options.Candidates[CandidateIndex]
+      const WorkItem = Options.WorkItems[CandidateIndex]
       NextIndex += 1
 
       try {
         const WorkerResult = await RunWorker({
-          Domain: Candidate.Domain,
+          SourceDomain: WorkItem.SourceDomain,
+          Target: WorkItem.Target,
+          Protocol: WorkItem.Protocol,
+          PriorityKind: WorkItem.PriorityKind,
           ApiToken: Options.ApiToken,
+          Locations: Options.Locations,
+          Limit: Options.Limit,
           CheckedAt: Options.CheckedAt
         })
 
@@ -90,13 +101,13 @@ export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promis
         }
 
         if (WorkerResult.Type === 'ProbeFailed') {
-          ProbeFailedDomains.add(Candidate.Domain)
+          ProbeFailedDomains.add(WorkItem.SourceDomain)
         }
 
         ProbeResultsByIndex[CandidateIndex] = WorkerResult.Result
       } catch (ErrorValue) {
-        ProbeFailedDomains.add(Candidate.Domain)
-        ProbeResultsByIndex[CandidateIndex] = UnknownResult(Candidate.Domain, ErrorValue)
+        ProbeFailedDomains.add(WorkItem.SourceDomain)
+        ProbeResultsByIndex[CandidateIndex] = UnknownResult(WorkItem, ErrorValue)
       }
     }
   }

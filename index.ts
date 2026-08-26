@@ -3,15 +3,16 @@ import * as Fs from 'node:fs'
 import * as Path from 'node:path'
 import * as Process from 'node:process'
 import * as Zod from 'zod'
-import { BuildDomainCandidates, SelectOldestDomains } from './sources/candidate-selection.ts'
+import { BuildDomainCandidates, SelectProbeWork } from './sources/candidate-selection.ts'
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
+import { LoadGlobalpingConfig } from './sources/config.ts'
 import { IsShallowRepository } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
-import { MaxMeasurementsPerRun } from './sources/globalping.ts'
+import { DefaultMaxCandidates } from './sources/globalping.ts'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
 import { RewriteFilterContent } from './sources/rewrite-filters.ts'
-import { LoadState, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
+import { ClearPendingProbe, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
 import type { RuleChange } from './sources/types.ts'
 
 const Env = await Zod.object({
@@ -20,19 +21,14 @@ const Env = await Zod.object({
   FILE_EXTENSION: Zod.string().nonempty().default('.txt'),
   STATE_DIRECTORY: Zod.string().nonempty().default('dead-domain-state'),
   SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
-  GLOBALPING_API_TOKEN: Zod.string().default(''),
-  MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun)).transform(Value => Number(Value)),
+  GLOBALPING_API_TOKEN: Zod.string().min(1, 'GLOBALPING_API_TOKEN is required'),
+  MAX_CANDIDATES: Zod.string().default(String(DefaultMaxCandidates)).transform(Value => Number(Value)),
   WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
 }).strip()
   .superRefine((Value, Context) => {
     if (!Number.isInteger(Value.MAX_CANDIDATES) || Value.MAX_CANDIDATES <= 0) {
       Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: 'MAX_CANDIDATES must be a positive integer' })
       return
-    }
-
-    // Above the anonymous quota, Globalping requires an API token to authenticate the higher limit.
-    if (Value.MAX_CANDIDATES > MaxMeasurementsPerRun && Value.GLOBALPING_API_TOKEN.length === 0) {
-      Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: `MAX_CANDIDATES may only exceed ${MaxMeasurementsPerRun} when globalping-api-token is set` })
     }
 
     if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
@@ -45,6 +41,7 @@ const WorkingDirectory = Process.env.CI_WORKSPACE_PATH ?? Process.cwd()
 const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
 const StateFilePath = Env.SQLITE_STATE_PATH ? Path.resolve(Env.SQLITE_STATE_PATH) : Path.resolve(StateDirectory, StateFileName)
 const CheckedAt = Math.floor(Date.now() / 1000)
+const GlobalpingConfig = LoadGlobalpingConfig(WorkingDirectory)
 
 const FilterFiles = ListFilterFiles(WorkingDirectory, { RootDirectory: Env.FILTER_ROOT, FileExtension: Env.FILE_EXTENSION })
 Core.info(`[dead-domain-pinger] Loaded ${FilterFiles.length} filter list files`)
@@ -65,12 +62,14 @@ const Candidates = await BuildDomainCandidates({
   State,
   FallbackAuthorTime: CheckedAt
 })
-const SelectedCandidates = SelectOldestDomains(Candidates, Env.MAX_CANDIDATES)
-Core.info(`[dead-domain-pinger] Selected ${SelectedCandidates.length} oldest domains for probing with ${Env.WORKER_COUNT} workers`)
+const SelectedWork = SelectProbeWork(Candidates, State, Env.MAX_CANDIDATES)
+Core.info(`[dead-domain-pinger] Selected ${SelectedWork.length} probe jobs with ${Env.WORKER_COUNT} workers (limit ${GlobalpingConfig.Limit} per measurement)`)
 
 const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = await ProbeDomainsWithWorkers({
-  Candidates: SelectedCandidates,
-  ApiToken: Env.GLOBALPING_API_TOKEN || undefined,
+  WorkItems: SelectedWork,
+  ApiToken: Env.GLOBALPING_API_TOKEN,
+  Locations: GlobalpingConfig.Locations,
+  Limit: GlobalpingConfig.Limit,
   CheckedAt,
   WorkerCount: Env.WORKER_COUNT
 })
@@ -78,11 +77,17 @@ const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = awai
 // SQLite state is owned by the main process; probe workers only return serializable results.
 for (const Result of ProbeResults) {
   RecordVerdict(State, Result.Domain, Result.Verdict, CheckedAt, Result.Warnings, Result.ModifiedAtOverride ?? undefined)
+  ClearPendingProbe(State, Result.Domain)
+
+  if (Result.NextProbe) {
+    QueuePendingProbe(State, Result.Domain, Result.NextProbe.Target, Result.NextProbe.Kind)
+    Core.notice(`[dead-domain-pinger] ${Result.Domain}: queued ${Result.NextProbe.Target} over HTTP for the next run (${Result.NextProbe.Kind})`)
+  }
 
   if (ProbeFailedDomains.has(Result.Domain)) {
-    Core.warning(`[dead-domain-pinger] ${Result.Domain}: probe failed — ${Result.Reason}`)
+    Core.warning(`[dead-domain-pinger] ${Result.Domain} via ${Result.Protocol} ${Result.Target}: probe failed — ${Result.Reason}`)
   } else {
-    Core.info(`[dead-domain-pinger] ${Result.Domain}: ${Result.Verdict} (${Result.Reason})`)
+    Core.info(`[dead-domain-pinger] ${Result.Domain} via ${Result.Protocol} ${Result.Target}: ${Result.Verdict} (${Result.Reason})`)
   }
 
   if (Result.ModifiedAtOverride !== null) {
@@ -102,7 +107,7 @@ const DeadDomains = new Set(ProbeResults.filter(Result => Result.Verdict === 'De
 Core.info(`[dead-domain-pinger] ${DeadDomains.size} domains judged dead`)
 
 const AffectedFiles = new Set(
-  SelectedCandidates
+  Candidates
     .filter(Candidate => DeadDomains.has(Candidate.Domain))
     .flatMap(Candidate => Candidate.Occurrences.map(Occurrence => Occurrence.FilePath))
 )
@@ -137,7 +142,7 @@ const RunUrl = Process.env.GITHUB_SERVER_URL && Process.env.GITHUB_REPOSITORY &&
 
 const Report: ReportInput = {
   DryRun: Env.DRY_RUN,
-  SelectedCount: SelectedCandidates.length,
+  SelectedCount: SelectedWork.length,
   ProbeResults,
   RateLimited,
   ChangedFiles,
