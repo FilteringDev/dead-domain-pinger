@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'dead-domain-pinger-state'
   worker-count:
-    description: 'Number of Node.js worker threads used to probe selected domains (defaults to os.cpus().length)'
+    description: 'Number of Node.js worker threads used for Git/domain ordering and selected-domain probes (defaults to os.cpus().length)'
     required: false
     default: ''
   dry-run:
@@ -108,10 +108,31 @@ runs:
         name: ${{ inputs.state-artifact-name }}
         path: ${{ runner.temp }}/dead-domain-pinger-state
 
+    - name: Optimize cloned Git history for domain ordering
+      run: |
+        set -euo pipefail
+
+        git -C "${GITHUB_WORKSPACE}" rev-parse --is-inside-work-tree >/dev/null
+        git -C "${GITHUB_WORKSPACE}" config core.commitGraph true
+        git -C "${GITHUB_WORKSPACE}" commit-graph write --reachable --changed-paths
+      shell: bash
+
+    - name: Create read-only Git ordering workspace
+      run: |
+        set -euo pipefail
+
+        OrderingWorkspace="$(mktemp -d "${RUNNER_TEMP}/dead-domain-pinger-ordering-XXXXXX")"
+        rmdir "${OrderingWorkspace}"
+        git -C "${GITHUB_WORKSPACE}" worktree add --detach "${OrderingWorkspace}" HEAD
+        chmod -R a-w "${GITHUB_WORKSPACE}/.git"
+        echo "ORDERING_WORKSPACE_PATH=${OrderingWorkspace}" >> "${GITHUB_ENV}"
+      shell: bash
+
     - name: Run dead domain pinger
       id: run
       env:
         CI_WORKSPACE_PATH: ${{ github.workspace }}
+        ORDERING_WORKSPACE_PATH: ${{ env.ORDERING_WORKSPACE_PATH }}
         FILTER_ROOT: ${{ inputs.filter-root }}
         FILE_EXTENSION: ${{ inputs.file-extension }}
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
@@ -120,9 +141,15 @@ runs:
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
         WORKER_COUNT: ${{ inputs.worker-count }}
         DRY_RUN: ${{ inputs.dry-run }}
+        GIT_OPTIONAL_LOCKS: '0'
       run: pnpm run ci
       shell: bash
       working-directory: ${{ github.action_path }}
+
+    - name: Restore Git write access for pull request
+      if: inputs.create-pr == 'true' && inputs.dry-run != 'true' && steps.run.outputs.has_changes == 'true'
+      run: chmod -R u+w "${GITHUB_WORKSPACE}/.git"
+      shell: bash
 
     - name: Create cleanup pull request
       if: inputs.create-pr == 'true' && inputs.dry-run != 'true' && steps.run.outputs.has_changes == 'true'

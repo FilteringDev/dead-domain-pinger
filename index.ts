@@ -38,6 +38,7 @@ const Env = await Zod.object({
   .parseAsync(Process.env)
 
 const WorkingDirectory = Process.env.CI_WORKSPACE_PATH ?? Process.cwd()
+const OrderingWorkingDirectory = Process.env.ORDERING_WORKSPACE_PATH ?? WorkingDirectory
 const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
 const StateFilePath = Env.SQLITE_STATE_PATH ? Path.resolve(Env.SQLITE_STATE_PATH) : Path.resolve(StateDirectory, StateFileName)
 const CheckedAt = Math.floor(Date.now() / 1000)
@@ -52,15 +53,16 @@ Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${O
 
 const State = await LoadState(StateFilePath)
 
-if (await IsShallowRepository(WorkingDirectory)) {
+if (await IsShallowRepository(OrderingWorkingDirectory)) {
   Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
 }
 
 const Candidates = await BuildDomainCandidates({
-  WorkingDirectory,
+  WorkingDirectory: OrderingWorkingDirectory,
   Occurrences,
   State,
-  FallbackAuthorTime: CheckedAt
+  FallbackAuthorTime: CheckedAt,
+  WorkerCount: Env.WORKER_COUNT
 })
 const SelectedWork = SelectProbeWork(Candidates, State, Env.MAX_CANDIDATES)
 Core.info(`[dead-domain-pinger] Selected ${SelectedWork.length} probe jobs with ${Env.WORKER_COUNT} workers (limit ${GlobalpingConfig.Limit} per measurement)`)

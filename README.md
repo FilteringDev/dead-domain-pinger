@@ -61,7 +61,7 @@ provide the required secret or write permissions.
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
 | `state-directory` | `dead-domain-state` | Directory used to write the Markdown report and PR body files |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
-| `worker-count` | `os.cpus().length` | Number of Node.js worker threads used to probe selected domains; when provided, it must be a positive integer |
+| `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for Git/domain ordering and selected-domain probes; when provided, it must be a positive integer |
 | `dry-run` | `false` | Probe domains but do not write any file changes |
 | `globalping-api-token` | - | Required Globalping access token |
 | `create-pr` | `false` | Create a pull request for changed filter files using GitHub CLI |

@@ -1,6 +1,7 @@
 import type { DomainCandidate, DomainOccurrence, ProbeWorkItem } from './types.ts'
 import { GetLastCheckedAt, GetModifiedAtOverride, type DeadDomainState } from './state.ts'
-import { GetDomainModifiedTimes } from './domain-history.ts'
+import { GetDomainModifiedTimesWithWorkers } from './ordering-pool.ts'
+import { GetDefaultWorkerCount } from './probe-pool.ts'
 
 export type BuildCandidatesOptions = {
   WorkingDirectory: string
@@ -8,6 +9,7 @@ export type BuildCandidatesOptions = {
   State: DeadDomainState
   /** Used when a line has no git history yet, so brand new lines are ranked as the newest ones. */
   FallbackAuthorTime: number
+  WorkerCount?: number
 }
 
 /**
@@ -16,14 +18,12 @@ export type BuildCandidatesOptions = {
  */
 export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Promise<DomainCandidate[]> {
   const OccurrencesByFile = Map.groupBy(Options.Occurrences, Occurrence => Occurrence.FilePath)
-
-  const ModifiedTimesByFile = new Map<string, Map<string, number>>()
-  for (const [FilePath, FileOccurrences] of OccurrencesByFile) {
-    ModifiedTimesByFile.set(
-      FilePath,
-      await GetDomainModifiedTimes(Options.WorkingDirectory, FilePath, FileOccurrences, Options.FallbackAuthorTime)
-    )
-  }
+  const ModifiedTimesByFile = await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: Options.WorkingDirectory,
+    OccurrencesByFile,
+    FallbackAuthorTime: Options.FallbackAuthorTime,
+    WorkerCount: Options.WorkerCount ?? GetDefaultWorkerCount()
+  })
 
   const CandidatesByDomain = new Map<string, DomainCandidate>()
 
