@@ -43,11 +43,11 @@ Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${O
 
 const State = LoadState(StateFilePath)
 
-if (IsShallowRepository(WorkingDirectory)) {
+if (await IsShallowRepository(WorkingDirectory)) {
   Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
 }
 
-const Candidates = BuildDomainCandidates({
+const Candidates = await BuildDomainCandidates({
   WorkingDirectory,
   Occurrences,
   State,

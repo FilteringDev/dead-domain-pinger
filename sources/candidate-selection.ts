@@ -14,7 +14,7 @@ export type BuildCandidatesOptions = {
  * Deduplicates domains, resolves the newest modification time of every domain and returns them
  * sorted from the least recently touched one to the most recent one.
  */
-export function BuildDomainCandidates(Options: BuildCandidatesOptions): DomainCandidate[] {
+export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Promise<DomainCandidate[]> {
   const OccurrencesByFile = new Map<string, DomainOccurrence[]>()
   for (const Occurrence of Options.Occurrences) {
     const FileOccurrences = OccurrencesByFile.get(Occurrence.FilePath)
@@ -29,7 +29,7 @@ export function BuildDomainCandidates(Options: BuildCandidatesOptions): DomainCa
   for (const [FilePath, FileOccurrences] of OccurrencesByFile) {
     ModifiedTimesByFile.set(
       FilePath,
-      GetDomainModifiedTimes(Options.WorkingDirectory, FilePath, FileOccurrences, Options.FallbackAuthorTime)
+      await GetDomainModifiedTimes(Options.WorkingDirectory, FilePath, FileOccurrences, Options.FallbackAuthorTime)
     )
   }
 

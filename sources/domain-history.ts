@@ -1,8 +1,8 @@
-import * as ChildProcess from 'node:child_process'
+import { simpleGit } from 'simple-git'
+import type { SimpleGit } from 'simple-git'
 import type { DomainOccurrence } from './types.ts'
 import { GetRuleDomains, ParseRule } from './rule-domains.ts'
 
-const GitMaxBuffer = 256 * 1024 * 1024
 const UncommittedCommit = '0'.repeat(40)
 const CommitSeparator = '\u0000'
 // A literal NUL cannot be passed as a process argument, so git has to produce the separator itself.
@@ -13,14 +13,9 @@ export type LineBlame = {
   AuthorTime: number
 }
 
-function RunGit(WorkingDirectory: string, Arguments: string[]): string | null {
+async function RunGit<Result>(WorkingDirectory: string, Operation: (Git: SimpleGit) => Promise<Result>): Promise<Result | null> {
   try {
-    return ChildProcess.execFileSync('git', Arguments, {
-      cwd: WorkingDirectory,
-      encoding: 'utf-8',
-      maxBuffer: GitMaxBuffer,
-      stdio: ['ignore', 'pipe', 'ignore']
-    })
+    return await Operation(simpleGit({ baseDir: WorkingDirectory }))
   } catch {
     return null
   }
@@ -48,9 +43,9 @@ function GetDomainsOfLines(Lines: string[]): Set<string> {
  * Maps 1-based line numbers of a file to the commit that last touched them.
  * Lines that are not committed yet and files without git history are left out.
  */
-export function GetLineBlame(WorkingDirectory: string, FilePath: string): Map<number, LineBlame> {
+export async function GetLineBlame(WorkingDirectory: string, FilePath: string): Promise<Map<number, LineBlame>> {
   const Blame = new Map<number, LineBlame>()
-  const BlameOutput = RunGit(WorkingDirectory, ['blame', '--line-porcelain', '--', FilePath])
+  const BlameOutput = await RunGit(WorkingDirectory, Git => Git.raw(['blame', '--line-porcelain', '--', FilePath]))
   if (BlameOutput === null) {
     return Blame
   }
@@ -124,24 +119,30 @@ function GetIntroducedDomains(Diff: CommitDiff): Set<string> {
   return new Set([...GetDomainsOfLines(Diff.AfterLines)].filter(Domain => !BeforeDomains.has(Domain)))
 }
 
-export function GetCommitIntroducedDomains(WorkingDirectory: string, Commit: string, FilePath: string): Set<string> {
-  const ShowOutput = RunGit(WorkingDirectory, ['show', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', Commit, '--', FilePath])
+export async function GetCommitIntroducedDomains(WorkingDirectory: string, Commit: string, FilePath: string): Promise<Set<string>> {
+  const ShowOutput = await RunGit(WorkingDirectory, Git => Git.show([
+    `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', Commit, '--', FilePath
+  ]))
   const Diff = ShowOutput === null ? undefined : ParseCommitDiffs(ShowOutput)[0]
 
   return Diff ? GetIntroducedDomains(Diff) : new Set()
 }
 
 /** History of a single line, newest first, back to the commit that created it. */
-function GetLineHistory(WorkingDirectory: string, FilePath: string, LineNumber: number): CommitDiff[] {
-  const LogOutput = RunGit(WorkingDirectory, ['log', `-L${LineNumber},${LineNumber}:${FilePath}`, `--format=${CommitSeparatorFormat}%H %at`, '--no-color'])
+async function GetLineHistory(WorkingDirectory: string, FilePath: string, LineNumber: number): Promise<CommitDiff[]> {
+  const LogOutput = await RunGit(WorkingDirectory, Git => Git.raw([
+    'log', `-L${LineNumber},${LineNumber}:${FilePath}`, `--format=${CommitSeparatorFormat}%H %at`, '--no-color'
+  ]))
 
   return LogOutput === null ? [] : ParseCommitDiffs(LogOutput)
 }
 
 /** Newest commit that brought each domain into a file, over the whole history of that file. */
-function GetFileIntroductionTimes(WorkingDirectory: string, FilePath: string): Map<string, number> {
+async function GetFileIntroductionTimes(WorkingDirectory: string, FilePath: string): Promise<Map<string, number>> {
   const IntroductionTimes = new Map<string, number>()
-  const LogOutput = RunGit(WorkingDirectory, ['log', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', '-p', '--', FilePath])
+  const LogOutput = await RunGit(WorkingDirectory, Git => Git.raw([
+    'log', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', '-p', '--', FilePath
+  ]))
   if (LogOutput === null) {
     return IntroductionTimes
   }
@@ -158,47 +159,47 @@ function GetFileIntroductionTimes(WorkingDirectory: string, FilePath: string): M
 }
 
 /** Resolves the last time each domain of a single file was introduced or changed by a commit. */
-export function GetDomainModifiedTimes(
+export async function GetDomainModifiedTimes(
   WorkingDirectory: string,
   FilePath: string,
   Occurrences: DomainOccurrence[],
   FallbackAuthorTime: number
-): Map<string, number> {
-  const Blame = GetLineBlame(WorkingDirectory, FilePath)
+): Promise<Map<string, number>> {
+  const Blame = await GetLineBlame(WorkingDirectory, FilePath)
   const IntroducedDomainsByCommit = new Map<string, Set<string>>()
   const ModifiedTimes = new Map<string, number>()
   let FileIntroductionTimes: Map<string, number> | null = null
 
-  const IntroducedDomainsOf = (Commit: string): Set<string> => {
+  const IntroducedDomainsOf = async (Commit: string): Promise<Set<string>> => {
     let IntroducedDomains = IntroducedDomainsByCommit.get(Commit)
     if (!IntroducedDomains) {
-      IntroducedDomains = GetCommitIntroducedDomains(WorkingDirectory, Commit, FilePath)
+      IntroducedDomains = await GetCommitIntroducedDomains(WorkingDirectory, Commit, FilePath)
       IntroducedDomainsByCommit.set(Commit, IntroducedDomains)
     }
 
     return IntroducedDomains
   }
 
-  const ResolveModifiedAt = (Occurrence: DomainOccurrence, LineBlameEntry: LineBlame): number => {
-    if (IntroducedDomainsOf(LineBlameEntry.Commit).has(Occurrence.Domain)) {
+  const ResolveModifiedAt = async (Occurrence: DomainOccurrence, LineBlameEntry: LineBlame): Promise<number> => {
+    if ((await IntroducedDomainsOf(LineBlameEntry.Commit)).has(Occurrence.Domain)) {
       return LineBlameEntry.AuthorTime
     }
 
-    for (const Diff of GetLineHistory(WorkingDirectory, FilePath, Occurrence.LineNumber)) {
+    for (const Diff of await GetLineHistory(WorkingDirectory, FilePath, Occurrence.LineNumber)) {
       // A commit that only moved the domain into this line does not count as a modification.
-      if (GetIntroducedDomains(Diff).has(Occurrence.Domain) && IntroducedDomainsOf(Diff.Commit).has(Occurrence.Domain)) {
+      if (GetIntroducedDomains(Diff).has(Occurrence.Domain) && (await IntroducedDomainsOf(Diff.Commit)).has(Occurrence.Domain)) {
         return Diff.AuthorTime
       }
     }
 
-    FileIntroductionTimes ??= GetFileIntroductionTimes(WorkingDirectory, FilePath)
+    FileIntroductionTimes ??= await GetFileIntroductionTimes(WorkingDirectory, FilePath)
 
     return FileIntroductionTimes.get(Occurrence.Domain) ?? LineBlameEntry.AuthorTime
   }
 
   for (const Occurrence of Occurrences) {
     const LineBlameEntry = Blame.get(Occurrence.LineNumber)
-    const ModifiedAt = LineBlameEntry ? ResolveModifiedAt(Occurrence, LineBlameEntry) : FallbackAuthorTime
+    const ModifiedAt = LineBlameEntry ? await ResolveModifiedAt(Occurrence, LineBlameEntry) : FallbackAuthorTime
 
     ModifiedTimes.set(Occurrence.Domain, Math.max(ModifiedTimes.get(Occurrence.Domain) ?? ModifiedAt, ModifiedAt))
   }
@@ -206,6 +207,6 @@ export function GetDomainModifiedTimes(
   return ModifiedTimes
 }
 
-export function IsShallowRepository(WorkingDirectory: string): boolean {
-  return RunGit(WorkingDirectory, ['rev-parse', '--is-shallow-repository'])?.trim() === 'true'
+export async function IsShallowRepository(WorkingDirectory: string): Promise<boolean> {
+  return (await RunGit(WorkingDirectory, Git => Git.revparse('--is-shallow-repository')))?.trim() === 'true'
 }

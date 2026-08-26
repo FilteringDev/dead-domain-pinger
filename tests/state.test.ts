@@ -32,11 +32,11 @@ test('RecordVerdict stores no override when none was ever recorded', () => {
   assert.equal('ModifiedAtOverride' in State.Domains['old.example'], false)
 })
 
-test('An override pushes a domain to the back of the queue', () => {
+test('An override pushes a domain to the back of the queue', async () => {
   const State = CreateEmptyState()
   RecordVerdict(State, 'redirected.example', 'Unknown', 500, [], 9000)
 
-  const Candidates = BuildDomainCandidates({
+  const Candidates = await BuildDomainCandidates({
     // Outside a git repository blame yields nothing, so every line uses the fallback time.
     WorkingDirectory: '/',
     Occurrences,
