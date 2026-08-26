@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import * as Fs from 'node:fs'
+import * as Os from 'node:os'
+import * as Path from 'node:path'
 import { BuildDomainCandidates } from '../sources/candidate-selection.ts'
-import { CreateEmptyState, GetModifiedAtOverride, RecordVerdict } from '../sources/state.ts'
+import { CreateEmptyState, GetModifiedAtOverride, LoadState, RecordVerdict, SaveState, StateFileName } from '../sources/state.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
 const Occurrences: DomainOccurrence[] = [
@@ -46,4 +49,40 @@ test('An override pushes a domain to the back of the queue', async () => {
 
   assert.deepEqual(Candidates.map(Candidate => Candidate.Domain), ['old.example', 'redirected.example'])
   assert.equal(Candidates[1].SortKey, 9000)
+})
+
+test('SQLite state persists a pruned state round trip', async () => {
+  const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
+  const StateFilePath = Path.join(StateDirectory, StateFileName)
+  const State = CreateEmptyState()
+  RecordVerdict(State, 'kept.example', 'Dead', 2000, ['warning'], 3000)
+  RecordVerdict(State, 'removed.example', 'Alive', 1000, [])
+
+  await SaveState(StateFilePath, State, new Set(['kept.example']))
+  const LoadedState = await LoadState(StateFilePath)
+
+  assert.deepEqual(Object.keys(LoadedState.Domains), ['kept.example'])
+  assert.deepEqual(LoadedState.Domains['kept.example'], {
+    LastCheckedAt: 2000,
+    LastVerdict: 'Dead',
+    LastWarnings: ['warning'],
+    ModifiedAtOverride: 3000
+  })
+})
+
+test('SQLite state falls back to empty when missing', async () => {
+  const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
+  const LoadedState = await LoadState(Path.join(StateDirectory, StateFileName))
+
+  assert.deepEqual(LoadedState, CreateEmptyState())
+})
+
+test('SQLite state falls back to empty when corrupt', async () => {
+  const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
+  const StateFilePath = Path.join(StateDirectory, StateFileName)
+  Fs.writeFileSync(StateFilePath, 'not sqlite', 'utf-8')
+
+  const LoadedState = await LoadState(StateFilePath)
+
+  assert.deepEqual(LoadedState, CreateEmptyState())
 })

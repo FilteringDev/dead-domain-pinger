@@ -21,6 +21,8 @@ delete a rule.
     filter-root: filterslists
     max-candidates: '50'
     state-directory: dead-domain-state
+    state-artifact-name: dead-domain-pinger-state
+    worker-count: '4'
     dry-run: 'false'
     # Optional: raises the anonymous rate limit and allows max-candidates above 50.
     globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
@@ -33,7 +35,9 @@ delete a rule.
 | `filter-root` | `.` | Directory (relative to the workspace) to scan for filter list files |
 | `file-extension` | `.txt` | File extension used by filter list files |
 | `max-candidates` | `50` | Maximum number of domains to probe in a single run (may only exceed 50 when `globalping-api-token` is set) |
-| `state-directory` | `dead-domain-state` | Directory used to persist state, report and PR body files |
+| `state-directory` | `dead-domain-state` | Directory used to write the Markdown report and PR body files |
+| `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
+| `worker-count` | `4` | Number of Node.js worker threads used to probe selected domains |
 | `dry-run` | `false` | Probe domains but do not write any file changes |
 | `globalping-api-token` | `''` | Globalping API token (optional; raises the anonymous rate limit and unlocks `max-candidates` above 50) |
 
@@ -52,9 +56,16 @@ delete a rule.
 
 ## State
 
-The action persists per-domain last-checked timestamps under `state-directory` so that repeated
-runs probe the least recently checked domains first. Each domain is dated individually from the
-git history: adding a domain to an existing rule refreshes only that domain, and moving or
-reformatting a rule keeps the dates of the domains it already carried. This needs the full
-history, so check the repository out with `fetch-depth: 0`. Upload and restore the state directory
-as a workflow artifact between runs to keep the queue rotating.
+The action persists per-domain last-checked timestamps in a SQLite database carried by a GitHub
+Actions artifact. During a run, that database is restored to a temporary directory under
+`runner.temp`, updated by the action, and uploaded again as `state-artifact-name` with maximum
+artifact compression. The generated Markdown report and pull request body still go under
+`state-directory` in the workspace.
+
+Each domain is dated individually from the git history: adding a domain to an existing rule
+refreshes only that domain, and moving or reformatting a rule keeps the dates of the domains it
+already carried. This needs the full history, so check the repository out with `fetch-depth: 0`.
+The first run starts with an empty SQLite state when no artifact exists yet.
+
+Selected domains are probed by a bounded Node.js worker-thread pool. Lower `worker-count` if the
+Globalping quota is tight or if parallel requests trigger rate limiting too quickly.

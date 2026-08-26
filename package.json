@@ -24,10 +24,12 @@
     "@structured-world/structured-public-domains": "^0.0.25",
     "@typescriptprime/securereq": "^2.0.0",
     "simple-git": "^3.36.0",
+    "sql.js": "^1.14.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "@types/sql.js": "^1.4.11",
     "oxlint": "^1.79.0",
     "oxlint-tsgolint": "^7.0.2001",
     "tsx": "^4.23.12",

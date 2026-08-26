@@ -7,20 +7,22 @@ import { BuildDomainCandidates, SelectOldestDomains } from './sources/candidate-
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
 import { IsShallowRepository } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
-import { GlobalpingRateLimitError, MaxMeasurementsPerRun, ProbeDomain } from './sources/globalping.ts'
+import { MaxMeasurementsPerRun } from './sources/globalping.ts'
+import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
 import { RewriteFilterContent } from './sources/rewrite-filters.ts'
 import { LoadState, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
-import { EvaluateMeasurement } from './sources/verdict.ts'
-import type { DomainProbeResult, RuleChange } from './sources/types.ts'
+import type { RuleChange } from './sources/types.ts'
 
 const Env = await Zod.object({
   DRY_RUN: Zod.string().default('false').transform(Value => Value === 'true'),
   FILTER_ROOT: Zod.string().nonempty().default('.'),
   FILE_EXTENSION: Zod.string().nonempty().default('.txt'),
   STATE_DIRECTORY: Zod.string().nonempty().default('dead-domain-state'),
+  SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
   GLOBALPING_API_TOKEN: Zod.string().default(''),
-  MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun)).transform(Value => Number(Value))
+  MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun)).transform(Value => Number(Value)),
+  WORKER_COUNT: Zod.string().default(String(GetDefaultWorkerCount())).transform(Value => Number(Value))
 }).strip()
   .superRefine((Value, Context) => {
     if (!Number.isInteger(Value.MAX_CANDIDATES) || Value.MAX_CANDIDATES <= 0) {
@@ -32,17 +34,17 @@ const Env = await Zod.object({
     if (Value.MAX_CANDIDATES > MaxMeasurementsPerRun && Value.GLOBALPING_API_TOKEN.length === 0) {
       Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: `MAX_CANDIDATES may only exceed ${MaxMeasurementsPerRun} when globalping-api-token is set` })
     }
+
+    if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
+      Context.addIssue({ code: 'custom', path: ['WORKER_COUNT'], message: 'WORKER_COUNT must be a positive integer' })
+    }
   })
   .parseAsync(Process.env)
 
 const WorkingDirectory = Process.env.CI_WORKSPACE_PATH ?? Process.cwd()
 const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
-const StateFilePath = Path.resolve(StateDirectory, StateFileName)
+const StateFilePath = Env.SQLITE_STATE_PATH ? Path.resolve(Env.SQLITE_STATE_PATH) : Path.resolve(StateDirectory, StateFileName)
 const CheckedAt = Math.floor(Date.now() / 1000)
-
-function FormatError(ErrorValue: unknown): string {
-  return ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue)
-}
 
 const FilterFiles = ListFilterFiles(WorkingDirectory, { RootDirectory: Env.FILTER_ROOT, FileExtension: Env.FILE_EXTENSION })
 Core.info(`[dead-domain-pinger] Loaded ${FilterFiles.length} filter list files`)
@@ -51,7 +53,7 @@ const Occurrences = CollectDomainOccurrences(WorkingDirectory, FilterFiles)
 const KnownDomains = new Set(Occurrences.map(Occurrence => Occurrence.Domain))
 Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${Occurrences.length} occurrences`)
 
-const State = LoadState(StateFilePath)
+const State = await LoadState(StateFilePath)
 
 if (await IsShallowRepository(WorkingDirectory)) {
   Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
@@ -64,52 +66,35 @@ const Candidates = await BuildDomainCandidates({
   FallbackAuthorTime: CheckedAt
 })
 const SelectedCandidates = SelectOldestDomains(Candidates, Env.MAX_CANDIDATES)
-Core.info(`[dead-domain-pinger] Selected ${SelectedCandidates.length} oldest domains for probing`)
+Core.info(`[dead-domain-pinger] Selected ${SelectedCandidates.length} oldest domains for probing with ${Env.WORKER_COUNT} workers`)
 
-const ProbeResults: DomainProbeResult[] = []
-let RateLimited = false
+const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = await ProbeDomainsWithWorkers({
+  Candidates: SelectedCandidates,
+  ApiToken: Env.GLOBALPING_API_TOKEN || undefined,
+  CheckedAt,
+  WorkerCount: Env.WORKER_COUNT
+})
 
-for (const Candidate of SelectedCandidates) {
-  if (RateLimited) {
-    break
+for (const Result of ProbeResults) {
+  RecordVerdict(State, Result.Domain, Result.Verdict, CheckedAt, Result.Warnings, Result.ModifiedAtOverride ?? undefined)
+
+  if (ProbeFailedDomains.has(Result.Domain)) {
+    Core.warning(`[dead-domain-pinger] ${Result.Domain}: probe failed — ${Result.Reason}`)
+  } else {
+    Core.info(`[dead-domain-pinger] ${Result.Domain}: ${Result.Verdict} (${Result.Reason})`)
   }
 
-  try {
-    const Measurement = await ProbeDomain(Candidate.Domain, Env.GLOBALPING_API_TOKEN || undefined)
-    const { Verdict, Reason, Warnings, SameDomainRedirects } = EvaluateMeasurement(Candidate.Domain, Measurement)
-
-    // A kept redirect means the domain moved on its own; treat it as freshly modified so it
-    // does not stay at the front of the oldest-first queue forever.
-    const ModifiedAtOverride = SameDomainRedirects.length > 0 && Verdict !== 'Dead' ? CheckedAt : null
-
-    ProbeResults.push({ Domain: Candidate.Domain, Verdict, Reason, Warnings, SameDomainRedirects, ModifiedAtOverride })
-    RecordVerdict(State, Candidate.Domain, Verdict, CheckedAt, Warnings, ModifiedAtOverride ?? undefined)
-    Core.info(`[dead-domain-pinger] ${Candidate.Domain}: ${Verdict} (${Reason})`)
-
-    if (ModifiedAtOverride !== null) {
-      Core.notice(`[dead-domain-pinger] ${Candidate.Domain}: redirects to ${SameDomainRedirects.join(', ')} within the same registrable domain — kept, last-modified date overridden to ${new Date(ModifiedAtOverride * 1000).toISOString()}`)
-    }
-
-    for (const Warning of Warnings) {
-      Core.warning(`[dead-domain-pinger] ${Candidate.Domain}: ${Warning}`)
-    }
-  } catch (ErrorValue) {
-    if (ErrorValue instanceof GlobalpingRateLimitError) {
-      RateLimited = true
-      Core.warning(`[dead-domain-pinger] ${FormatError(ErrorValue)} — stopping further probes`)
-      break
-    }
-
-    ProbeResults.push({
-      Domain: Candidate.Domain,
-      Verdict: 'Unknown',
-      Reason: FormatError(ErrorValue),
-      Warnings: [],
-      SameDomainRedirects: [],
-      ModifiedAtOverride: null
-    })
-    Core.warning(`[dead-domain-pinger] ${Candidate.Domain}: probe failed — ${FormatError(ErrorValue)}`)
+  if (Result.ModifiedAtOverride !== null) {
+    Core.notice(`[dead-domain-pinger] ${Result.Domain}: redirects to ${Result.SameDomainRedirects.join(', ')} within the same registrable domain — kept, last-modified date overridden to ${new Date(Result.ModifiedAtOverride * 1000).toISOString()}`)
   }
+
+  for (const Warning of Result.Warnings) {
+    Core.warning(`[dead-domain-pinger] ${Result.Domain}: ${Warning}`)
+  }
+}
+
+if (RateLimited) {
+  Core.warning(`[dead-domain-pinger] ${RateLimitMessage ?? 'Globalping rate limit reached'} — stopping further probes`)
 }
 
 const DeadDomains = new Set(ProbeResults.filter(Result => Result.Verdict === 'Dead').map(Result => Result.Domain))
@@ -143,7 +128,7 @@ for (const FilePath of [...AffectedFiles].sort((A, B) => A.localeCompare(B))) {
   }
 }
 
-SaveState(StateFilePath, State, KnownDomains)
+await SaveState(StateFilePath, State, KnownDomains)
 
 const RunUrl = Process.env.GITHUB_SERVER_URL && Process.env.GITHUB_REPOSITORY && Process.env.GITHUB_RUN_ID
   ? `${Process.env.GITHUB_SERVER_URL}/${Process.env.GITHUB_REPOSITORY}/actions/runs/${Process.env.GITHUB_RUN_ID}`
@@ -164,6 +149,7 @@ const ReportMarkdown = BuildReportMarkdown(Report)
 const ReportFilePath = Path.resolve(StateDirectory, ReportFileName)
 const PullRequestBodyFilePath = Path.resolve(StateDirectory, PullRequestBodyFileName)
 
+Fs.mkdirSync(StateDirectory, { recursive: true })
 Fs.writeFileSync(ReportFilePath, `${ReportMarkdown}\n`, 'utf-8')
 Fs.writeFileSync(PullRequestBodyFilePath, `${BuildPullRequestBody(Report)}\n`, 'utf-8')
 

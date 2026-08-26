@@ -23,6 +23,14 @@ inputs:
     description: 'Directory (relative to the workspace) used to persist state, report and PR body files'
     required: false
     default: 'dead-domain-state'
+  state-artifact-name:
+    description: 'GitHub Actions artifact name used to carry the SQLite state database between runs'
+    required: false
+    default: 'dead-domain-pinger-state'
+  worker-count:
+    description: 'Number of Node.js worker threads used to probe selected domains'
+    required: false
+    default: '4'
   dry-run:
     description: 'Probe domains but do not write any file changes'
     required: false
@@ -66,6 +74,17 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
 
+    - name: Prepare SQLite state directory
+      run: mkdir -p '${{ runner.temp }}/dead-domain-pinger-state'
+      shell: bash
+
+    - name: Download SQLite state artifact
+      uses: actions/download-artifact@v7
+      continue-on-error: true
+      with:
+        name: ${{ inputs.state-artifact-name }}
+        path: ${{ runner.temp }}/dead-domain-pinger-state
+
     - name: Run dead domain pinger
       id: run
       env:
@@ -75,7 +94,17 @@ runs:
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         STATE_DIRECTORY: ${{ inputs.state-directory }}
+        SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
+        WORKER_COUNT: ${{ inputs.worker-count }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: pnpm run ci
       shell: bash
       working-directory: ${{ github.action_path }}
+
+    - name: Upload SQLite state artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.state-artifact-name }}
+        path: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
+        if-no-files-found: error
+        compression-level: 9
