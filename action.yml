@@ -28,9 +28,9 @@ inputs:
     required: false
     default: 'dead-domain-pinger-state'
   worker-count:
-    description: 'Number of Node.js worker threads used to probe selected domains'
+    description: 'Number of Node.js worker threads used to probe selected domains (defaults to os.cpus().length)'
     required: false
-    default: '4'
+    default: ''
   dry-run:
     description: 'Probe domains but do not write any file changes'
     required: false

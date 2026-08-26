@@ -22,7 +22,7 @@ const Env = await Zod.object({
   SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
   GLOBALPING_API_TOKEN: Zod.string().default(''),
   MAX_CANDIDATES: Zod.string().default(String(MaxMeasurementsPerRun)).transform(Value => Number(Value)),
-  WORKER_COUNT: Zod.string().default(String(GetDefaultWorkerCount())).transform(Value => Number(Value))
+  WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
 }).strip()
   .superRefine((Value, Context) => {
     if (!Number.isInteger(Value.MAX_CANDIDATES) || Value.MAX_CANDIDATES <= 0) {
@@ -75,6 +75,7 @@ const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = awai
   WorkerCount: Env.WORKER_COUNT
 })
 
+// SQLite state is owned by the main process; probe workers only return serializable results.
 for (const Result of ProbeResults) {
   RecordVerdict(State, Result.Domain, Result.Verdict, CheckedAt, Result.Warnings, Result.ModifiedAtOverride ?? undefined)
 

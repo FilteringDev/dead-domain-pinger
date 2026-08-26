@@ -22,7 +22,7 @@ export type ProbePoolResult = {
 export type ProbeRunner = (Data: ProbeWorkerData) => Promise<ProbeWorkerResult>
 
 export function GetDefaultWorkerCount(): number {
-  return Math.max(1, Math.min(4, Os.availableParallelism()))
+  return Math.max(1, Os.cpus().length)
 }
 
 export function NormalizeWorkerCount(WorkerCount: number): number {

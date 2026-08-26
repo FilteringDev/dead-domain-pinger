@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ProbeDomainsWithWorkers } from '../sources/probe-pool.ts'
+import * as Os from 'node:os'
+import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from '../sources/probe-pool.ts'
 import type { DomainCandidate, DomainProbeResult } from '../sources/types.ts'
 
 function Candidate(Domain: string): DomainCandidate {
@@ -24,6 +25,10 @@ function AliveResult(Domain: string): DomainProbeResult {
     ModifiedAtOverride: null
   }
 }
+
+test('GetDefaultWorkerCount uses the Node.js CPU count', () => {
+  assert.equal(GetDefaultWorkerCount(), Math.max(1, Os.cpus().length))
+})
 
 test('ProbeDomainsWithWorkers preserves selected candidate order', async () => {
   const Result = await ProbeDomainsWithWorkers({
