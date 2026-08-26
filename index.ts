@@ -5,6 +5,7 @@ import * as Process from 'node:process'
 import * as Zod from 'zod'
 import { BuildDomainCandidates, SelectOldestDomains } from './sources/candidate-selection.ts'
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
+import { IsShallowRepository } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
 import { GlobalpingRateLimitError, MaxMeasurementsPerRun, ProbeDomain } from './sources/globalping.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
@@ -41,6 +42,11 @@ const KnownDomains = new Set(Occurrences.map(Occurrence => Occurrence.Domain))
 Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${Occurrences.length} occurrences`)
 
 const State = LoadState(StateFilePath)
+
+if (IsShallowRepository(WorkingDirectory)) {
+  Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
+}
+
 const Candidates = BuildDomainCandidates({
   WorkingDirectory,
   Occurrences,

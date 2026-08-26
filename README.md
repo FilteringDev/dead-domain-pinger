@@ -11,6 +11,11 @@ delete a rule.
 ## Usage
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    # The queue is ordered by git history, which a shallow clone does not have.
+    fetch-depth: 0
+
 - uses: FilteringDev/dead-domain-pinger@v1
   with:
     filter-root: filterslists
@@ -45,5 +50,8 @@ delete a rule.
 ## State
 
 The action persists per-domain last-checked timestamps under `state-directory` so that repeated
-runs probe the least recently checked domains first (using `git blame` to date each rule). Upload
-and restore this directory as a workflow artifact between runs to keep the queue rotating.
+runs probe the least recently checked domains first. Each domain is dated individually from the
+git history: adding a domain to an existing rule refreshes only that domain, and moving or
+reformatting a rule keeps the dates of the domains it already carried. This needs the full
+history, so check the repository out with `fetch-depth: 0`. Upload and restore the state directory
+as a workflow artifact between runs to keep the queue rotating.

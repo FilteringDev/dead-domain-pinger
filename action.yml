@@ -1,6 +1,6 @@
 name: 'Dead Domain Pinger'
 author: 'PiQuark6046 and contributors'
-description: 'Probes the domains referenced by AdGuard-style filter list rules and removes the ones that are dead'
+description: 'Probes the domains referenced by AdGuard-style filter list rules and removes the ones that are dead (requires a checkout with fetch-depth: 0)'
 
 inputs:
   filter-root:

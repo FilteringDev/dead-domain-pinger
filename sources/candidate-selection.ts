@@ -1,6 +1,6 @@
 import type { DomainCandidate, DomainOccurrence } from './types.ts'
 import { GetLastCheckedAt, GetModifiedAtOverride, type DeadDomainState } from './state.ts'
-import { GetLineAuthorTimes } from './git-blame-age.ts'
+import { GetDomainModifiedTimes } from './domain-history.ts'
 
 export type BuildCandidatesOptions = {
   WorkingDirectory: string
@@ -15,17 +15,28 @@ export type BuildCandidatesOptions = {
  * sorted from the least recently touched one to the most recent one.
  */
 export function BuildDomainCandidates(Options: BuildCandidatesOptions): DomainCandidate[] {
-  const AuthorTimesByFile = new Map<string, Map<number, number>>()
+  const OccurrencesByFile = new Map<string, DomainOccurrence[]>()
+  for (const Occurrence of Options.Occurrences) {
+    const FileOccurrences = OccurrencesByFile.get(Occurrence.FilePath)
+    if (FileOccurrences) {
+      FileOccurrences.push(Occurrence)
+    } else {
+      OccurrencesByFile.set(Occurrence.FilePath, [Occurrence])
+    }
+  }
+
+  const ModifiedTimesByFile = new Map<string, Map<string, number>>()
+  for (const [FilePath, FileOccurrences] of OccurrencesByFile) {
+    ModifiedTimesByFile.set(
+      FilePath,
+      GetDomainModifiedTimes(Options.WorkingDirectory, FilePath, FileOccurrences, Options.FallbackAuthorTime)
+    )
+  }
+
   const CandidatesByDomain = new Map<string, DomainCandidate>()
 
   for (const Occurrence of Options.Occurrences) {
-    let AuthorTimes = AuthorTimesByFile.get(Occurrence.FilePath)
-    if (!AuthorTimes) {
-      AuthorTimes = GetLineAuthorTimes(Options.WorkingDirectory, Occurrence.FilePath)
-      AuthorTimesByFile.set(Occurrence.FilePath, AuthorTimes)
-    }
-
-    const ModifiedAt = AuthorTimes.get(Occurrence.LineNumber) ?? Options.FallbackAuthorTime
+    const ModifiedAt = ModifiedTimesByFile.get(Occurrence.FilePath)?.get(Occurrence.Domain) ?? Options.FallbackAuthorTime
     const Existing = CandidatesByDomain.get(Occurrence.Domain)
 
     if (!Existing) {
