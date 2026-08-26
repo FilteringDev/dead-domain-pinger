@@ -15,15 +15,7 @@ export type BuildCandidatesOptions = {
  * sorted from the least recently touched one to the most recent one.
  */
 export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Promise<DomainCandidate[]> {
-  const OccurrencesByFile = new Map<string, DomainOccurrence[]>()
-  for (const Occurrence of Options.Occurrences) {
-    const FileOccurrences = OccurrencesByFile.get(Occurrence.FilePath)
-    if (FileOccurrences) {
-      FileOccurrences.push(Occurrence)
-    } else {
-      OccurrencesByFile.set(Occurrence.FilePath, [Occurrence])
-    }
-  }
+  const OccurrencesByFile = Map.groupBy(Options.Occurrences, Occurrence => Occurrence.FilePath)
 
   const ModifiedTimesByFile = new Map<string, Map<string, number>>()
   for (const [FilePath, FileOccurrences] of OccurrencesByFile) {

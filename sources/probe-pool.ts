@@ -1,9 +1,9 @@
 import * as Os from 'node:os'
 import * as Process from 'node:process'
-import { Worker } from 'node:worker_threads'
+import { Piscina } from 'piscina'
 import type { DomainProbeResult, ProbeWorkItem } from './types.ts'
 import type { GlobalpingLocation } from './config.ts'
-import type { ProbeWorkerData, ProbeWorkerResult } from './probe-worker.ts'
+import type { ProbeWorkerData, ProbeWorkerResult, ProbeWorkerSharedData } from './probe-worker.ts'
 
 export type ProbePoolOptions = {
   WorkItems: ProbeWorkItem[]
@@ -32,20 +32,24 @@ export function NormalizeWorkerCount(WorkerCount: number): number {
   return Number.isInteger(WorkerCount) && WorkerCount > 0 ? WorkerCount : GetDefaultWorkerCount()
 }
 
-function RunProbeWorker(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
-  return new Promise((Resolve, Reject) => {
-    const WorkerThread = new Worker(new URL('./probe-worker.ts', import.meta.url), {
-      workerData: Data,
-      execArgv: Process.execArgv
-    })
+/** Locations/ApiToken/Limit/CheckedAt are the same for every task, so they are cloned once per
+ *  pooled worker (Piscina `workerData`) instead of once per probed domain. */
+function CreateProbePool(Shared: ProbeWorkerSharedData, WorkerCount: number): Piscina {
+  return new Piscina({
+    filename: new URL('./probe-worker.ts', import.meta.url).href,
+    workerData: Shared,
+    minThreads: WorkerCount,
+    maxThreads: WorkerCount,
+    execArgv: Process.execArgv
+  })
+}
 
-    WorkerThread.once('message', Message => Resolve(Message as ProbeWorkerResult))
-    WorkerThread.once('error', Reject)
-    WorkerThread.once('exit', ExitCode => {
-      if (ExitCode !== 0) {
-        Reject(new Error(`Probe worker exited with code ${ExitCode}`))
-      }
-    })
+function RunProbeWorker(Pool: Piscina): ProbeRunner {
+  return Data => Pool.run({
+    SourceDomain: Data.SourceDomain,
+    Target: Data.Target,
+    Protocol: Data.Protocol,
+    PriorityKind: Data.PriorityKind
   })
 }
 
@@ -64,8 +68,11 @@ function UnknownResult(WorkItem: ProbeWorkItem, ErrorValue: unknown): DomainProb
 }
 
 export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promise<ProbePoolResult> {
-  const RunWorker = Options.RunWorker ?? RunProbeWorker
   const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Options.WorkItems.length)
+  const Pool = Options.RunWorker
+    ? null
+    : CreateProbePool({ ApiToken: Options.ApiToken, Locations: Options.Locations, Limit: Options.Limit, CheckedAt: Options.CheckedAt }, WorkerCount)
+  const RunWorker = Options.RunWorker ?? RunProbeWorker(Pool!)
   const ProbeResultsByIndex: Array<DomainProbeResult | undefined> = []
   const ProbeFailedDomains = new Set<string>()
   let NextIndex = 0
@@ -112,7 +119,11 @@ export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promis
     }
   }
 
-  await Promise.all(Array.from({ length: WorkerCount }, () => RunNext()))
+  try {
+    await Promise.all(Array.from({ length: WorkerCount }, () => RunNext()))
+  } finally {
+    await Pool?.destroy()
+  }
 
   return {
     ProbeResults: ProbeResultsByIndex.filter(Result => Result !== undefined),

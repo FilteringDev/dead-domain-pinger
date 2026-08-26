@@ -1,20 +1,26 @@
-import { parentPort, workerData } from 'node:worker_threads'
+import { workerData } from 'piscina'
 import type { GlobalpingLocation } from './config.ts'
 import { GlobalpingRateLimitError, ProbeDomain } from './globalping.ts'
 import { DetermineNextProbe } from './probe-transitions.ts'
 import { EvaluateMeasurement } from './verdict.ts'
 import type { DomainProbeResult, PriorityProbeKind, ProbeProtocol } from './types.ts'
 
-export type ProbeWorkerData = {
-  SourceDomain: string
-  Target: string
-  Protocol: ProbeProtocol
-  PriorityKind: PriorityProbeKind | null
+/** Constant for the whole probe run; cloned once per pooled worker instead of once per task. */
+export type ProbeWorkerSharedData = {
   Locations: GlobalpingLocation[]
   Limit: number
   ApiToken: string
   CheckedAt: number
 }
+
+export type ProbeWorkerTask = {
+  SourceDomain: string
+  Target: string
+  Protocol: ProbeProtocol
+  PriorityKind: PriorityProbeKind | null
+}
+
+export type ProbeWorkerData = ProbeWorkerTask & ProbeWorkerSharedData
 
 export type ProbeWorkerResult = {
   Type: 'Result'
@@ -79,8 +85,6 @@ async function RunProbe(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
   }
 }
 
-if (!parentPort) {
-  throw new Error('probe-worker must run in a worker thread')
+export default function ProbeWorkerHandler(Task: ProbeWorkerTask): Promise<ProbeWorkerResult> {
+  return RunProbe({ ...Task, ...(workerData as ProbeWorkerSharedData) })
 }
-
-parentPort.postMessage(await RunProbe(workerData as ProbeWorkerData))
