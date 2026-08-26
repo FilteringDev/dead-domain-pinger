@@ -34,6 +34,30 @@ inputs:
     description: 'Probe domains but do not write any file changes'
     required: false
     default: 'false'
+  create-pr:
+    description: 'Create a pull request for changed filter files using GitHub CLI'
+    required: false
+    default: 'false'
+  report-artifact-name:
+    description: 'GitHub Actions artifact name used to carry the generated Markdown report'
+    required: false
+    default: 'dead-domain-pinger-report'
+  cleanup-branch-prefix:
+    description: 'Prefix for per-run cleanup branches and older pull requests to close'
+    required: false
+    default: 'dead-domain-pinger/cleanup-'
+  cleanup-pr-label:
+    description: 'Optional label required when identifying older cleanup pull requests'
+    required: false
+    default: ''
+  pr-base:
+    description: 'Base branch for the generated pull request'
+    required: false
+    default: ''
+  pr-title:
+    description: 'Title for the generated pull request'
+    required: false
+    default: 'Remove dead domains'
 
 outputs:
   has_changes:
@@ -99,6 +123,87 @@ runs:
       run: pnpm run ci
       shell: bash
       working-directory: ${{ github.action_path }}
+
+    - name: Create cleanup pull request
+      if: inputs.create-pr == 'true' && inputs.dry-run != 'true' && steps.run.outputs.has_changes == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        PR_BODY_PATH: ${{ steps.run.outputs.pr_body_path }}
+        CHANGED_FILES: ${{ steps.run.outputs.changed_files }}
+        BRANCH_PREFIX: ${{ inputs.cleanup-branch-prefix }}
+        PR_BASE: ${{ inputs.pr-base }}
+        GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        CLEANUP_PR_LABEL: ${{ inputs.cleanup-pr-label }}
+      run: |
+        set -euo pipefail
+
+        command -v gh >/dev/null 2>&1 || {
+          echo 'gh CLI is required when create-pr is enabled' >&2
+          exit 1
+        }
+
+        [[ -n "${GH_TOKEN}" ]] || {
+          echo 'GitHub token is required when create-pr is enabled' >&2
+          exit 1
+        }
+
+        git rev-parse --is-inside-work-tree >/dev/null
+        git config user.name 'github-actions[bot]'
+        git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+        Branch="${BRANCH_PREFIX}${GITHUB_RUN_ID}"
+        BodyPath="${GITHUB_WORKSPACE}/${PR_BODY_PATH}"
+        BaseBranch="${PR_BASE:-${GITHUB_DEFAULT_BRANCH:-${GITHUB_BASE_REF:-main}}}"
+        [[ -f "${BodyPath}" ]] || {
+          echo "Pull request body file not found: ${BodyPath}" >&2
+          exit 1
+        }
+
+        ChangedFilesJson="$(node --input-type=module -e '
+          const files = JSON.parse(process.env.CHANGED_FILES)
+          if (!Array.isArray(files) || files.some(file => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.split("/").includes(".."))) process.exit(1)
+          process.stdout.write(files.join("\n"))
+        ')"
+        mapfile -t ChangedFileList <<< "${ChangedFilesJson}"
+
+        [[ -n "${ChangedFilesJson}" ]] || {
+          echo 'No changed files were reported; skipping pull request creation'
+          exit 0
+        }
+
+        git switch --create "${Branch}"
+        git add -- "${ChangedFileList[@]}"
+        git diff --cached --quiet && {
+          echo 'No staged changes remain; skipping pull request creation'
+          exit 0
+        }
+
+        git commit -m 'Remove dead domains'
+        git push --set-upstream origin "${Branch}"
+
+        mapfile -t ExistingPullRequests < <(gh pr list --repo "${GH_REPO}" --state open --json number,headRefName,labels --limit 100 --jq '.[] | select(.headRefName | startswith(env.BRANCH_PREFIX)) | [.number, ([.labels[].name] | join(","))] | @tsv')
+        for PullRequest in "${ExistingPullRequests[@]}"; do
+          [[ -n "${PullRequest}" ]] || continue
+          PullRequestNumber="${PullRequest%%$'\t'*}"
+          PullRequestLabels="${PullRequest#*$'\t'}"
+          if [[ -n "${CLEANUP_PR_LABEL}" && ",${PullRequestLabels}," != *",${CLEANUP_PR_LABEL},"* ]]; then
+            continue
+          fi
+          gh pr close "${PullRequestNumber}" --repo "${GH_REPO}" --comment 'Superseded by a newer dead-domain cleanup run.'
+        done
+
+        gh pr create --repo "${GH_REPO}" --head "${Branch}" --base "${BaseBranch}" --title "${PR_TITLE}" --body-file "${BodyPath}"
+      shell: bash
+
+    - name: Upload Markdown report artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.report-artifact-name }}
+        path: ${{ inputs.state-directory }}/dead-domain-report.md
+        if-no-files-found: error
+        compression-level: 9
 
     - name: Upload SQLite state artifact
       uses: actions/upload-artifact@v7

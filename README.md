@@ -26,6 +26,32 @@ delete a rule.
     globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
 ```
 
+To let the action open cleanup pull requests, the calling job must grant `contents: write` and
+`pull-requests: write`, and set `create-pr: 'true'`:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 0
+
+  - uses: FilteringDev/dead-domain-pinger@v1
+    with:
+      create-pr: 'true'
+      globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
+```
+
+Each changed run creates a branch named `dead-domain-pinger/cleanup-<run id>`. Older open pull
+requests whose branches use the configured prefix are closed before the new pull request is
+created. Set `cleanup-pr-label` to require a label when selecting older pull requests. Runs with
+no changes and dry runs do not commit, push, close, or create pull requests. Automatic pull
+requests require a trusted scheduled or manual workflow; fork pull requests generally cannot
+provide the required secret or write permissions.
+
 ## Inputs
 
 | Name | Default | Description |
@@ -38,6 +64,12 @@ delete a rule.
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used to probe selected domains; when provided, it must be a positive integer |
 | `dry-run` | `false` | Probe domains but do not write any file changes |
 | `globalping-api-token` | - | Required Globalping access token |
+| `create-pr` | `false` | Create a pull request for changed filter files using GitHub CLI |
+| `report-artifact-name` | `dead-domain-pinger-report` | Artifact name for the generated Markdown report |
+| `cleanup-branch-prefix` | `dead-domain-pinger/cleanup-` | Prefix for per-run branches and older pull requests to close |
+| `cleanup-pr-label` | - | Optional label required when selecting older pull requests |
+| `pr-base` | repository default branch | Base branch for the generated pull request |
+| `pr-title` | `Remove dead domains` | Title for the generated pull request |
 
 ## Globalping configuration
 
@@ -73,6 +105,10 @@ filter-domain rule.
 | `warning_count` | Number of warnings collected while evaluating probe results |
 | `report_path` | Workspace-relative path to the generated Markdown report |
 | `pr_body_path` | Workspace-relative path to the generated pull request body |
+
+When `create-pr` is enabled, only the changed filter files are committed. The generated
+`pull-request-body.md` is passed to `gh pr create --body-file`, while `dead-domain-report.md` is
+uploaded separately as the `report-artifact-name` artifact. Neither generated file is committed.
 
 ## State
 
