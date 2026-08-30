@@ -9,14 +9,17 @@ import { LoadGlobalpingConfig } from './sources/config.ts'
 import { IsShallowRepository } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
 import { DefaultMaxCandidates } from './sources/globalping.ts'
+import { BuildGitDiff, DiffFileName, ResolvePreviewOutputDirectory, WritePreviewArtifacts, type PreviewFileChange } from './sources/preview.ts'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
 import { RewriteFilterContent } from './sources/rewrite-filters.ts'
-import { ClearPendingProbe, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
+import { ClearPendingProbe, CreateEmptyState, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
 import type { RuleChange } from './sources/types.ts'
 
 const Env = await Zod.object({
   DRY_RUN: Zod.string().default('false').transform(Value => Value === 'true'),
+  ALWAYS_REFRESH: Zod.string().default('false').transform(Value => Value === 'true'),
+  PREVIEW_OUTPUT_DIRECTORY: Zod.string().default(''),
   FILTER_ROOT: Zod.string().nonempty().default('.'),
   FILE_EXTENSION: Zod.string().nonempty().default('.txt'),
   STATE_DIRECTORY: Zod.string().nonempty().default('dead-domain-state'),
@@ -34,11 +37,26 @@ const Env = await Zod.object({
     if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
       Context.addIssue({ code: 'custom', path: ['WORKER_COUNT'], message: 'WORKER_COUNT must be a positive integer' })
     }
+
+    if (Value.DRY_RUN && !Value.PREVIEW_OUTPUT_DIRECTORY) {
+      Context.addIssue({ code: 'custom', path: ['PREVIEW_OUTPUT_DIRECTORY'], message: 'PREVIEW_OUTPUT_DIRECTORY is required in dry-run mode' })
+    }
+
+    if (Value.ALWAYS_REFRESH && !Value.DRY_RUN) {
+      Context.addIssue({ code: 'custom', path: ['ALWAYS_REFRESH'], message: 'ALWAYS_REFRESH is only supported by local dry-run mode' })
+    }
+
+    if (Value.ALWAYS_REFRESH && Value.SQLITE_STATE_PATH) {
+      Context.addIssue({ code: 'custom', path: ['ALWAYS_REFRESH'], message: 'ALWAYS_REFRESH cannot be combined with SQLITE_STATE_PATH' })
+    }
   })
   .parseAsync(Process.env)
 
 const WorkingDirectory = Process.env.CI_WORKSPACE_PATH ?? Process.cwd()
-const OrderingWorkingDirectory = Process.env.ORDERING_WORKSPACE_PATH ?? WorkingDirectory
+const OrderingWorkingDirectory = Process.env.ORDERING_WORKSPACE_PATH || WorkingDirectory
+const PreviewOutputDirectory = Env.DRY_RUN && Env.PREVIEW_OUTPUT_DIRECTORY
+  ? ResolvePreviewOutputDirectory(WorkingDirectory, Env.PREVIEW_OUTPUT_DIRECTORY)
+  : null
 const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
 const StateFilePath = Env.SQLITE_STATE_PATH ? Path.resolve(Env.SQLITE_STATE_PATH) : Path.resolve(StateDirectory, StateFileName)
 const CheckedAt = Math.floor(Date.now() / 1000)
@@ -51,7 +69,7 @@ const Occurrences = CollectDomainOccurrences(WorkingDirectory, FilterFiles)
 const KnownDomains = new Set(Occurrences.map(Occurrence => Occurrence.Domain))
 Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${Occurrences.length} occurrences`)
 
-const State = await LoadState(StateFilePath)
+const State = Env.ALWAYS_REFRESH ? CreateEmptyState() : await LoadState(StateFilePath)
 
 if (await IsShallowRepository(OrderingWorkingDirectory)) {
   Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
@@ -117,6 +135,7 @@ const AffectedFiles = new Set(
 const ModifiedRules: RuleChange[] = []
 const RemovedRules: RuleChange[] = []
 const ChangedFiles: string[] = []
+const PreviewFileChanges: PreviewFileChange[] = []
 
 for (const FilePath of [...AffectedFiles].sort((A, B) => A.localeCompare(B))) {
   const AbsolutePath = Path.resolve(WorkingDirectory, FilePath)
@@ -130,13 +149,20 @@ for (const FilePath of [...AffectedFiles].sort((A, B) => A.localeCompare(B))) {
   ModifiedRules.push(...Result.ModifiedRules)
   RemovedRules.push(...Result.RemovedRules)
   ChangedFiles.push(FilePath)
+  PreviewFileChanges.push({
+    FilePath,
+    OriginalContent: Content,
+    ProposedContent: Result.Content
+  })
 
   if (!Env.DRY_RUN) {
     Fs.writeFileSync(AbsolutePath, Result.Content, 'utf-8')
   }
 }
 
-await SaveState(StateFilePath, State, KnownDomains)
+if (!Env.DRY_RUN) {
+  await SaveState(StateFilePath, State, KnownDomains)
+}
 
 const RunUrl = Process.env.GITHUB_SERVER_URL && Process.env.GITHUB_REPOSITORY && Process.env.GITHUB_RUN_ID
   ? `${Process.env.GITHUB_SERVER_URL}/${Process.env.GITHUB_REPOSITORY}/actions/runs/${Process.env.GITHUB_RUN_ID}`
@@ -154,27 +180,46 @@ const Report: ReportInput = {
 }
 
 const ReportMarkdown = BuildReportMarkdown(Report)
-const ReportFilePath = Path.resolve(StateDirectory, ReportFileName)
-const PullRequestBodyFilePath = Path.resolve(StateDirectory, PullRequestBodyFileName)
+let ReportFilePath: string
+let PullRequestBodyFilePath: string | null
+let DiffFilePath: string | null
 
-Fs.mkdirSync(StateDirectory, { recursive: true })
-Fs.writeFileSync(ReportFilePath, `${ReportMarkdown}\n`, 'utf-8')
-Fs.writeFileSync(PullRequestBodyFilePath, `${BuildPullRequestBody(Report)}\n`, 'utf-8')
+if (Env.DRY_RUN) {
+  if (!PreviewOutputDirectory) {
+    throw new Error('Preview output directory was not configured')
+  }
+
+  ReportFilePath = Path.resolve(PreviewOutputDirectory, ReportFileName)
+  PullRequestBodyFilePath = null
+  DiffFilePath = Path.resolve(PreviewOutputDirectory, DiffFileName)
+  WritePreviewArtifacts(PreviewOutputDirectory, BuildGitDiff(PreviewFileChanges), ReportMarkdown)
+} else {
+  ReportFilePath = Path.resolve(StateDirectory, ReportFileName)
+  PullRequestBodyFilePath = Path.resolve(StateDirectory, PullRequestBodyFileName)
+  DiffFilePath = null
+
+  Fs.mkdirSync(StateDirectory, { recursive: true })
+  Fs.writeFileSync(ReportFilePath, `${ReportMarkdown}\n`, 'utf-8')
+  Fs.writeFileSync(PullRequestBodyFilePath, `${BuildPullRequestBody(Report)}\n`, 'utf-8')
+}
 
 const WarningCount = ProbeResults.reduce((Total, Result) => Total + Result.Warnings.length, 0)
 const HasChanges = ChangedFiles.length > 0
 
-Core.setOutput('has_changes', String(HasChanges && !Env.DRY_RUN))
-Core.setOutput('dead_domains', JSON.stringify([...DeadDomains]))
-Core.setOutput('changed_files', JSON.stringify(ChangedFiles))
-Core.setOutput('probed_count', String(ProbeResults.length))
-Core.setOutput('rate_limited', String(RateLimited))
-Core.setOutput('warning_count', String(WarningCount))
-Core.setOutput('report_path', Path.relative(WorkingDirectory, ReportFilePath))
-Core.setOutput('pr_body_path', Path.relative(WorkingDirectory, PullRequestBodyFilePath))
+if (Process.env.LOCAL_PREVIEW !== 'true') {
+  Core.setOutput('has_changes', String(HasChanges))
+  Core.setOutput('dead_domains', JSON.stringify([...DeadDomains]))
+  Core.setOutput('changed_files', JSON.stringify(ChangedFiles))
+  Core.setOutput('probed_count', String(ProbeResults.length))
+  Core.setOutput('rate_limited', String(RateLimited))
+  Core.setOutput('warning_count', String(WarningCount))
+  Core.setOutput('report_path', Path.relative(WorkingDirectory, ReportFilePath))
+  Core.setOutput('diff_path', DiffFilePath ? Path.relative(WorkingDirectory, DiffFilePath) : '')
+  Core.setOutput('pr_body_path', PullRequestBodyFilePath ? Path.relative(WorkingDirectory, PullRequestBodyFilePath) : '')
+}
 
 Core.info(ReportMarkdown)
 
-if (Process.env.GITHUB_STEP_SUMMARY) {
+if (!Env.DRY_RUN && Process.env.GITHUB_STEP_SUMMARY) {
   Fs.appendFileSync(Process.env.GITHUB_STEP_SUMMARY, `${ReportMarkdown}\n`, 'utf-8')
 }

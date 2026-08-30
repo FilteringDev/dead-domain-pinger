@@ -19,7 +19,7 @@ inputs:
     description: 'Required Globalping access token, e.g. secrets.GLOBALPING_API_TOKEN'
     required: true
   state-directory:
-    description: 'Directory (relative to the workspace) used to persist state, report and PR body files'
+    description: 'Directory (relative to the workspace) used to persist state, report and PR body files outside dry-run mode'
     required: false
     default: 'dead-domain-state'
   state-artifact-name:
@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   dry-run:
-    description: 'Probe domains but do not write any file changes'
+    description: 'Preview changes without modifying the checkout or persisted state; emits a Git diff and Markdown report'
     required: false
     default: 'false'
   create-pr:
@@ -39,7 +39,7 @@ inputs:
     required: false
     default: 'false'
   report-artifact-name:
-    description: 'GitHub Actions artifact name used to carry the generated Markdown report'
+    description: 'GitHub Actions artifact name used for the report, plus the generated Git diff in dry-run mode'
     required: false
     default: 'dead-domain-pinger-report'
   cleanup-branch-prefix:
@@ -61,7 +61,7 @@ inputs:
 
 outputs:
   has_changes:
-    description: 'Whether any filter list file was changed (always false in dry-run mode)'
+    description: 'Whether any filter list change was applied or proposed by a dry run'
     value: ${{ steps.run.outputs.has_changes }}
   dead_domains:
     description: 'JSON array of domains judged dead in this run'
@@ -79,10 +79,13 @@ outputs:
     description: 'Number of warnings collected while evaluating probe results'
     value: ${{ steps.run.outputs.warning_count }}
   report_path:
-    description: 'Workspace-relative path to the generated Markdown report'
+    description: 'Workspace-relative path to the generated Markdown report (may point outside the checkout in dry-run mode)'
     value: ${{ steps.run.outputs.report_path }}
+  diff_path:
+    description: 'Workspace-relative path to the generated Git diff in dry-run mode; empty otherwise'
+    value: ${{ steps.run.outputs.diff_path }}
   pr_body_path:
-    description: 'Workspace-relative path to the generated pull request body'
+    description: 'Workspace-relative path to the generated pull request body; empty in dry-run mode'
     value: ${{ steps.run.outputs.pr_body_path }}
 
 runs:
@@ -108,7 +111,18 @@ runs:
         name: ${{ inputs.state-artifact-name }}
         path: ${{ runner.temp }}/dead-domain-pinger-state
 
+    - name: Prepare preview output directory
+      if: inputs.dry-run == 'true'
+      id: preview-output
+      run: |
+        set -euo pipefail
+
+        PreviewOutputDirectory="$(mktemp -d "${RUNNER_TEMP}/dead-domain-pinger-preview-XXXXXX")"
+        echo "path=${PreviewOutputDirectory}" >> "${GITHUB_OUTPUT}"
+      shell: bash
+
     - name: Optimize cloned Git history for domain ordering
+      if: inputs.dry-run != 'true'
       run: |
         set -euo pipefail
 
@@ -118,6 +132,7 @@ runs:
       shell: bash
 
     - name: Create read-only Git ordering workspace
+      if: inputs.dry-run != 'true'
       run: |
         set -euo pipefail
 
@@ -141,6 +156,9 @@ runs:
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
         WORKER_COUNT: ${{ inputs.worker-count }}
         DRY_RUN: ${{ inputs.dry-run }}
+        ALWAYS_REFRESH: 'false'
+        LOCAL_PREVIEW: 'false'
+        PREVIEW_OUTPUT_DIRECTORY: ${{ steps.preview-output.outputs.path }}
         GIT_OPTIONAL_LOCKS: '0'
       run: pnpm run ci
       shell: bash
@@ -225,6 +243,7 @@ runs:
       shell: bash
 
     - name: Upload Markdown report artifact
+      if: inputs.dry-run != 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.report-artifact-name }}
@@ -232,7 +251,19 @@ runs:
         if-no-files-found: error
         compression-level: 9
 
+    - name: Upload preview artifact
+      if: inputs.dry-run == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.report-artifact-name }}
+        path: |
+          ${{ steps.preview-output.outputs.path }}/dead-domain.diff
+          ${{ steps.preview-output.outputs.path }}/dead-domain-report.md
+        if-no-files-found: error
+        compression-level: 9
+
     - name: Upload SQLite state artifact
+      if: inputs.dry-run != 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.state-artifact-name }}

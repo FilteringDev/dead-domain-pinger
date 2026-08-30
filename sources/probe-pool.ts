@@ -68,6 +68,15 @@ function UnknownResult(WorkItem: ProbeWorkItem, ErrorValue: unknown): DomainProb
 }
 
 export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promise<ProbePoolResult> {
+  if (Options.WorkItems.length === 0) {
+    return {
+      ProbeResults: [],
+      ProbeFailedDomains: new Set(),
+      RateLimited: false,
+      RateLimitMessage: null
+    }
+  }
+
   const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Options.WorkItems.length)
   const Pool = Options.RunWorker
     ? null

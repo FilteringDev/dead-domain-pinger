@@ -13,6 +13,7 @@
   },
   "include": [
     "index.ts",
+    "local.ts",
     "sources/**/*.ts",
     "tests/**/*.ts"
   ]

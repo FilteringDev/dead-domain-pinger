@@ -52,6 +52,39 @@ no changes and dry runs do not commit, push, close, or create pull requests. Aut
 requests require a trusted scheduled or manual workflow; fork pull requests generally cannot
 provide the required secret or write permissions.
 
+## Local preview and debugging
+
+Run the same probe and rewrite pipeline against a local checkout without changing its files,
+Git metadata, or SQLite state:
+
+```sh
+pnpm install --no-lockfile
+GLOBALPING_API_TOKEN=... pnpm run local -- \
+  --workspace /path/to/filter-repository \
+  --output /path/outside/filter-repository/dead-domain-preview
+```
+
+The output directory must be outside the target checkout. A successful run writes exactly
+`dead-domain.diff` and `dead-domain-report.md`. The diff uses the checkout's current on-disk
+contents as its baseline, so unrelated local edits are not included as separate changes. Review
+and apply it from the target checkout with:
+
+```sh
+git apply --check /path/to/dead-domain-preview/dead-domain.diff
+git apply /path/to/dead-domain-preview/dead-domain.diff
+```
+
+An empty diff means no filter changes were proposed. The local runner accepts `--filter-root`,
+`--file-extension`, `--max-candidates`, `--worker-count`, and an optional read-only
+`--state-path`; run it with `--help` for the complete interface. Without `--state-path`, it reads
+the default `dead-domain-state/dead-domain-state.sqlite` when present. `--always-refresh` ignores
+all prior state, including queued HTTP follow-ups, and cannot be combined with `--state-path`.
+It still respects `--max-candidates`.
+
+In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
+artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
+reports whether the preview diff is non-empty.
+
 ## Inputs
 
 | Name | Default | Description |
@@ -59,13 +92,13 @@ provide the required secret or write permissions.
 | `filter-root` | `.` | Directory (relative to the workspace) to scan for filter list files |
 | `file-extension` | `.txt` | File extension used by filter list files |
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
-| `state-directory` | `dead-domain-state` | Directory used to write the Markdown report and PR body files |
+| `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for Git/domain ordering and selected-domain probes; when provided, it must be a positive integer |
-| `dry-run` | `false` | Probe domains but do not write any file changes |
+| `dry-run` | `false` | Emit a Git diff and Markdown report without modifying the checkout, Git metadata, or persisted state |
 | `globalping-api-token` | - | Required Globalping access token |
 | `create-pr` | `false` | Create a pull request for changed filter files using GitHub CLI |
-| `report-artifact-name` | `dead-domain-pinger-report` | Artifact name for the generated Markdown report |
+| `report-artifact-name` | `dead-domain-pinger-report` | Artifact name for the report and, in dry-run mode, the generated Git diff |
 | `cleanup-branch-prefix` | `dead-domain-pinger/cleanup-` | Prefix for per-run branches and older pull requests to close |
 | `cleanup-pr-label` | - | Optional label required when selecting older pull requests |
 | `pr-base` | repository default branch | Base branch for the generated pull request |
@@ -97,18 +130,21 @@ filter-domain rule.
 
 | Name | Description |
 | --- | --- |
-| `has_changes` | Whether any filter list file was changed (always `false` in dry-run mode) |
+| `has_changes` | Whether any filter list change was applied or proposed by a dry run |
 | `dead_domains` | JSON array of domains judged dead in this run |
 | `changed_files` | JSON array of filter list files that were changed |
 | `probed_count` | Number of domains actually probed in this run |
 | `rate_limited` | Whether probing stopped early because of a Globalping rate limit |
 | `warning_count` | Number of warnings collected while evaluating probe results |
-| `report_path` | Workspace-relative path to the generated Markdown report |
-| `pr_body_path` | Workspace-relative path to the generated pull request body |
+| `report_path` | Workspace-relative path to the generated Markdown report; a dry-run path may lead outside the checkout |
+| `diff_path` | Workspace-relative path to `dead-domain.diff` in dry-run mode; empty otherwise |
+| `pr_body_path` | Workspace-relative path to the generated pull request body; empty in dry-run mode |
 
 When `create-pr` is enabled, only the changed filter files are committed. The generated
 `pull-request-body.md` is passed to `gh pr create --body-file`, while `dead-domain-report.md` is
 uploaded separately as the `report-artifact-name` artifact. Neither generated file is committed.
+Dry runs do not create the pull request body; their report artifact contains
+`dead-domain-report.md` and `dead-domain.diff` instead.
 
 ## State
 
@@ -116,7 +152,8 @@ The action persists per-domain last-checked timestamps in a SQLite database carr
 Actions artifact. During a run, that database is restored to a temporary directory under
 `runner.temp`, updated by the action, and uploaded again as `state-artifact-name` with maximum
 artifact compression. The generated Markdown report and pull request body still go under
-`state-directory` in the workspace.
+`state-directory` in the workspace for ordinary runs. Dry runs read the restored database as a
+snapshot, discard all in-memory updates, and write their report and diff under `runner.temp`.
 
 SQLite loading, verdict recording and saving stay in the main process. Probe workers do not touch
 the database file; they send serializable probe results back to the main process, which updates the

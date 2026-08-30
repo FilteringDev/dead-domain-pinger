@@ -30,6 +30,22 @@ test('GetDefaultWorkerCount uses the Node.js CPU count', () => {
   expect(GetDefaultWorkerCount()).toBe(Math.max(1, Os.cpus().length))
 })
 
+test('ProbeDomainsWithWorkers returns without creating a zero-thread pool when no work is selected', async () => {
+  const Result = await ProbeDomainsWithWorkers({
+    WorkItems: [],
+    ApiToken: 'token',
+    Locations: [{ country: 'KR' }],
+    Limit: 1,
+    CheckedAt: 1000,
+    WorkerCount: 1
+  })
+
+  expect(Result.ProbeResults).toEqual([])
+  expect(Result.ProbeFailedDomains.size).toBe(0)
+  expect(Result.RateLimited).toBe(false)
+  expect(Result.RateLimitMessage).toBe(null)
+})
+
 test('ProbeDomainsWithWorkers preserves selected candidate order', async () => {
   const Result = await ProbeDomainsWithWorkers({
     WorkItems: [WorkItem('b.example'), WorkItem('a.example')],
