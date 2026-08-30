@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import { BuildMeasurementPayload } from '../sources/globalping.ts'
 
 test('measurement payload preserves configured locations, limit, target, and protocol', () => {
@@ -11,7 +10,7 @@ test('measurement payload preserves configured locations, limit, target, and pro
     ApiToken: 'not-used-when-building-payload'
   }))
 
-  assert.deepEqual(Payload, {
+  expect(Payload).toEqual({
     type: 'http',
     target: 'www.example.com',
     locations: [{ country: 'KR', tags: ['eyeball-network'] }],

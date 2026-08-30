@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import { AreDomainsRelated, EvaluateMeasurement, IsRegistrableDomainRoot } from '../sources/verdict.ts'
 import type { GlobalpingMeasurement, GlobalpingProbeResult } from '../sources/globalping.ts'
 
@@ -11,15 +10,15 @@ function Measurement(...Results: Partial<GlobalpingProbeResult>[]): GlobalpingMe
 }
 
 test('AreDomainsRelated compares registrable domains', () => {
-  assert.ok(AreDomainsRelated('sub.example.com', 'example.com'))
-  assert.ok(AreDomainsRelated('www.example.co.kr', 'shop.example.co.kr'))
-  assert.equal(AreDomainsRelated('example.com', 'example.org'), false)
-  assert.equal(AreDomainsRelated('example.co.kr', 'other.co.kr'), false)
+  expect(AreDomainsRelated('sub.example.com', 'example.com')).toBeTruthy()
+  expect(AreDomainsRelated('www.example.co.kr', 'shop.example.co.kr')).toBeTruthy()
+  expect(AreDomainsRelated('example.com', 'example.org')).toBe(false)
+  expect(AreDomainsRelated('example.co.kr', 'other.co.kr')).toBe(false)
 })
 
 test('IsRegistrableDomainRoot excludes subdomains', () => {
-  assert.equal(IsRegistrableDomainRoot('example.com'), true)
-  assert.equal(IsRegistrableDomainRoot('www.example.com'), false)
+  expect(IsRegistrableDomainRoot('example.com')).toBe(true)
+  expect(IsRegistrableDomainRoot('www.example.com')).toBe(false)
 })
 
 test('A redirect to a different registrable domain is dead', () => {
@@ -29,9 +28,9 @@ test('A redirect to a different registrable domain is dead', () => {
     headers: { location: 'https://example.org/' }
   }))
 
-  assert.equal(Result.Verdict, 'Dead')
-  assert.deepEqual(Result.SameDomainRedirects, [])
-  assert.ok(Result.Warnings.some(Warning => Warning.includes('example.org')))
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.SameDomainRedirects).toEqual([])
+  expect(Result.Warnings.some(Warning => Warning.includes('example.org'))).toBeTruthy()
 })
 
 test('A redirect inside the same registrable domain is detected and kept', () => {
@@ -41,9 +40,9 @@ test('A redirect inside the same registrable domain is detected and kept', () =>
     headers: { location: 'https://example.com/' }
   }))
 
-  assert.notEqual(Result.Verdict, 'Dead')
-  assert.deepEqual(Result.SameDomainRedirects, ['example.com'])
-  assert.deepEqual(Result.Warnings, [])
+  expect(Result.Verdict).not.toBe('Dead')
+  expect(Result.SameDomainRedirects).toEqual(['example.com'])
+  expect(Result.Warnings).toEqual([])
 })
 
 test('A relative redirect is not treated as a redirect', () => {
@@ -53,9 +52,9 @@ test('A relative redirect is not treated as a redirect', () => {
     headers: { location: '/new-path' }
   }))
 
-  assert.notEqual(Result.Verdict, 'Dead')
-  assert.deepEqual(Result.SameDomainRedirects, [])
-  assert.deepEqual(Result.Warnings, [])
+  expect(Result.Verdict).not.toBe('Dead')
+  expect(Result.SameDomainRedirects).toEqual([])
+  expect(Result.Warnings).toEqual([])
 })
 
 test('A failed TLS certificate validation is dead and warns', () => {
@@ -65,9 +64,9 @@ test('A failed TLS certificate validation is dead and warns', () => {
     tls: { authorized: false, error: 'certificate has expired' }
   }))
 
-  assert.equal(Result.Verdict, 'Dead')
-  assert.ok(Result.Reason.includes('TLS'))
-  assert.ok(Result.Warnings.some(Warning => Warning.includes('plain HTTP')))
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.Reason.includes('TLS')).toBeTruthy()
+  expect(Result.Warnings.some(Warning => Warning.includes('plain HTTP'))).toBeTruthy()
 })
 
 test('A TLS error reported only in the raw output is dead', () => {
@@ -77,7 +76,7 @@ test('A TLS error reported only in the raw output is dead', () => {
     rawOutput: 'Error: CERT_HAS_EXPIRED'
   }))
 
-  assert.equal(Result.Verdict, 'Dead')
+  expect(Result.Verdict).toBe('Dead')
 })
 
 test('A TLS handshake error reported in raw output is dead', () => {
@@ -86,8 +85,8 @@ test('A TLS handshake error reported in raw output is dead', () => {
     rawOutput: 'Error: TLS handshake failed with EPROTO'
   }))
 
-  assert.equal(Result.Verdict, 'Dead')
-  assert.equal(Result.FailureKind, 'Tls')
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.FailureKind).toBe('Tls')
 })
 
 test('A valid certificate does not trigger the TLS rule', () => {
@@ -97,8 +96,8 @@ test('A valid certificate does not trigger the TLS rule', () => {
     tls: { authorized: true }
   }))
 
-  assert.equal(Result.Verdict, 'Alive')
-  assert.deepEqual(Result.Warnings, [])
+  expect(Result.Verdict).toBe('Alive')
+  expect(Result.Warnings).toEqual([])
 })
 
 test('DNS resolution failures stay dead', () => {
@@ -108,11 +107,11 @@ test('DNS resolution failures stay dead', () => {
     rawOutput: 'queryA ENOTFOUND example.com'
   }))
 
-  assert.equal(Result.Verdict, 'Dead')
+  expect(Result.Verdict).toBe('Dead')
 })
 
 test('A 2xx response stays alive', () => {
-  assert.equal(EvaluateMeasurement('example.com', Measurement({ statusCode: 200, resolvedAddress: '1.2.3.4' })).Verdict, 'Alive')
+  expect(EvaluateMeasurement('example.com', Measurement({ statusCode: 200, resolvedAddress: '1.2.3.4' })).Verdict).toBe('Alive')
 })
 
 test('A timeout stays alive', () => {
@@ -122,9 +121,9 @@ test('A timeout stays alive', () => {
     rawOutput: 'Error: ETIMEDOUT'
   }))
 
-  assert.equal(Result.Verdict, 'Alive')
+  expect(Result.Verdict).toBe('Alive')
 })
 
 test('An empty measurement is unknown', () => {
-  assert.equal(EvaluateMeasurement('example.com', Measurement()).Verdict, 'Unknown')
+  expect(EvaluateMeasurement('example.com', Measurement()).Verdict).toBe('Unknown')
 })

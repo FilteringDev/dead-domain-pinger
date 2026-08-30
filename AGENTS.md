@@ -9,7 +9,7 @@ This repository implements a TypeScript GitHub composite action. `index.ts` coor
 Use pnpm and an active Node.js LTS release, matching CI.
 
 - `pnpm install --no-lockfile` installs dependencies; this project intentionally does not track a lockfile.
-- `pnpm test` runs all `tests/**/*.test.ts` files through Node's built-in test runner and `tsx`.
+- `pnpm test` runs all `tests/**/*.test.ts` files once with Vitest.
 - `pnpm lint` runs Oxlint, including the repository's custom rules.
 - `pnpm typecheck` performs strict TypeScript checking without emitting files.
 - `pnpm ci` runs `index.ts` directly; supply the action's required environment, notably `GLOBALPING_API_TOKEN`, and use test data or dry-run settings when developing locally.
@@ -22,7 +22,7 @@ Use ESM TypeScript with explicit `.ts` extensions for local imports. Follow two-
 
 ## Testing Guidelines
 
-Tests use `node:test` with `node:assert/strict`. Name files `<module>.test.ts` and write behavior-focused test names, such as `test('invalid config fails ...', ...)`. Add regression coverage beside every behavioral change. There is no configured numeric coverage threshold, so prioritize relevant success, failure, and boundary cases. Avoid live network dependencies; isolate Globalping behavior with controlled inputs or mocks.
+Tests use Vitest's `test` and `expect` APIs through explicit imports from `vitest`. Name files `<module>.test.ts` and write behavior-focused test names, such as `test('invalid config fails ...', ...)`. Add regression coverage beside every behavioral change. There is no configured numeric coverage threshold, so prioritize relevant success, failure, and boundary cases. Avoid live network dependencies; isolate Globalping behavior with controlled inputs or mocks.
 
 ## Commit & Pull Request Guidelines
 

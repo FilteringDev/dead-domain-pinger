@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
@@ -16,7 +15,7 @@ test('RecordVerdict persists a modification date override', () => {
   const State = CreateEmptyState()
   RecordVerdict(State, 'redirected.example', 'Unknown', 1000, [], 1000)
 
-  assert.equal(GetModifiedAtOverride(State, 'redirected.example'), 1000)
+  expect(GetModifiedAtOverride(State, 'redirected.example')).toBe(1000)
 })
 
 test('RecordVerdict carries a previous override forward', () => {
@@ -24,24 +23,24 @@ test('RecordVerdict carries a previous override forward', () => {
   RecordVerdict(State, 'redirected.example', 'Unknown', 1000, [], 1000)
   RecordVerdict(State, 'redirected.example', 'Alive', 2000, [])
 
-  assert.equal(State.Domains['redirected.example'].LastCheckedAt, 2000)
-  assert.equal(GetModifiedAtOverride(State, 'redirected.example'), 1000)
+  expect(State.Domains['redirected.example'].LastCheckedAt).toBe(2000)
+  expect(GetModifiedAtOverride(State, 'redirected.example')).toBe(1000)
 })
 
 test('RecordVerdict stores no override when none was ever recorded', () => {
   const State = CreateEmptyState()
   RecordVerdict(State, 'old.example', 'Alive', 2000, [])
 
-  assert.equal('ModifiedAtOverride' in State.Domains['old.example'], false)
+  expect('ModifiedAtOverride' in State.Domains['old.example']).toBe(false)
 })
 
 test('pending probes can be queued and cleared independently from verdicts', () => {
   const State = CreateEmptyState()
   QueuePendingProbe(State, 'example.com', 'www.example.com', 'TryWwwHttp')
 
-  assert.deepEqual(GetPendingProbe(State, 'example.com'), { Target: 'www.example.com', Kind: 'TryWwwHttp' })
+  expect(GetPendingProbe(State, 'example.com')).toEqual({ Target: 'www.example.com', Kind: 'TryWwwHttp' })
   ClearPendingProbe(State, 'example.com')
-  assert.equal(GetPendingProbe(State, 'example.com'), null)
+  expect(GetPendingProbe(State, 'example.com')).toBe(null)
 })
 
 test('An override pushes a domain to the back of the queue', async () => {
@@ -56,8 +55,8 @@ test('An override pushes a domain to the back of the queue', async () => {
     FallbackAuthorTime: 1000
   })
 
-  assert.deepEqual(Candidates.map(Candidate => Candidate.Domain), ['old.example', 'redirected.example'])
-  assert.equal(Candidates[1].SortKey, 9000)
+  expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['old.example', 'redirected.example'])
+  expect(Candidates[1].SortKey).toBe(9000)
 })
 
 test('SQLite state persists a pruned state round trip', async () => {
@@ -72,14 +71,14 @@ test('SQLite state persists a pruned state round trip', async () => {
   await SaveState(StateFilePath, State, new Set(['kept.example']))
   const LoadedState = await LoadState(StateFilePath)
 
-  assert.deepEqual(Object.keys(LoadedState.Domains), ['kept.example'])
-  assert.deepEqual(LoadedState.Domains['kept.example'], {
+  expect(Object.keys(LoadedState.Domains)).toEqual(['kept.example'])
+  expect(LoadedState.Domains['kept.example']).toEqual({
     LastCheckedAt: 2000,
     LastVerdict: 'Dead',
     LastWarnings: ['warning'],
     ModifiedAtOverride: 3000
   })
-  assert.deepEqual(LoadedState.PendingProbes, {
+  expect(LoadedState.PendingProbes).toEqual({
     'kept.example': { Target: 'kept.example', Kind: 'RetryOriginalHttp' }
   })
 })
@@ -88,7 +87,7 @@ test('SQLite state falls back to empty when missing', async () => {
   const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
   const LoadedState = await LoadState(Path.join(StateDirectory, StateFileName))
 
-  assert.deepEqual(LoadedState, CreateEmptyState())
+  expect(LoadedState).toEqual(CreateEmptyState())
 })
 
 test('SQLite state falls back to empty when corrupt', async () => {
@@ -98,5 +97,5 @@ test('SQLite state falls back to empty when corrupt', async () => {
 
   const LoadedState = await LoadState(StateFilePath)
 
-  assert.deepEqual(LoadedState, CreateEmptyState())
+  expect(LoadedState).toEqual(CreateEmptyState())
 })

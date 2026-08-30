@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
@@ -46,8 +45,8 @@ test('A domain added to an existing rule does not refresh its neighbours', async
     Occurrence('second.example', 1)
   ], 9000)
 
-  assert.equal(ModifiedTimes.get('first.example'), 1000)
-  assert.equal(ModifiedTimes.get('second.example'), 2000)
+  expect(ModifiedTimes.get('first.example')).toBe(1000)
+  expect(ModifiedTimes.get('second.example')).toBe(2000)
 })
 
 test('Rewriting a rule keeps the date of the domains it already had', async () => {
@@ -57,7 +56,7 @@ test('Rewriting a rule keeps the date of the domains it already had', async () =
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [Occurrence('first.example', 1)], 9000)
 
-  assert.equal(ModifiedTimes.get('first.example'), 1000)
+  expect(ModifiedTimes.get('first.example')).toBe(1000)
 })
 
 test('Moving a domain to another line keeps its original date', async () => {
@@ -70,8 +69,8 @@ test('Moving a domain to another line keeps its original date', async () => {
     Occurrence('second.example', 2)
   ], 9000)
 
-  assert.equal(ModifiedTimes.get('first.example'), 1000)
-  assert.equal(ModifiedTimes.get('second.example'), 1000)
+  expect(ModifiedTimes.get('first.example')).toBe(1000)
+  expect(ModifiedTimes.get('second.example')).toBe(1000)
 })
 
 test('A domain re-added after a removal uses the newest date', async () => {
@@ -85,7 +84,7 @@ test('A domain re-added after a removal uses the newest date', async () => {
     Occurrence('first.example', 2)
   ], 9000)
 
-  assert.equal(ModifiedTimes.get('first.example'), 3000)
+  expect(ModifiedTimes.get('first.example')).toBe(3000)
 })
 
 test('Uncommitted files fall back to the given time', async () => {
@@ -97,5 +96,5 @@ test('Uncommitted files fall back to the given time', async () => {
     { Domain: 'fresh.example', FilePath: 'extra.txt', LineNumber: 1 }
   ], 9000)
 
-  assert.equal(ModifiedTimes.get('fresh.example'), 9000)
+  expect(ModifiedTimes.get('fresh.example')).toBe(9000)
 })

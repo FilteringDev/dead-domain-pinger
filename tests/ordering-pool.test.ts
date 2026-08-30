@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import { GetDomainModifiedTimesWithWorkers } from '../sources/ordering-pool.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
@@ -30,7 +29,7 @@ test('GetDomainModifiedTimesWithWorkers associates results with their file after
     }
   })
 
-  assert.deepEqual(Result, new Map([
+  expect(Result).toEqual(new Map([
     ['first.txt', new Map([['first.example', 10]])],
     ['second.txt', new Map([['second.example', 20]])]
   ]))
@@ -45,5 +44,5 @@ test('GetDomainModifiedTimesWithWorkers skips worker creation when no files need
     RunWorker: () => Promise.reject(new Error('worker should not run'))
   })
 
-  assert.deepEqual(Result, new Map())
+  expect(Result).toEqual(new Map())
 })

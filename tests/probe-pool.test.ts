@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import * as Os from 'node:os'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from '../sources/probe-pool.ts'
 import type { DomainProbeResult, ProbeWorkItem } from '../sources/types.ts'
@@ -28,7 +27,7 @@ function AliveResult(Domain: string): DomainProbeResult {
 }
 
 test('GetDefaultWorkerCount uses the Node.js CPU count', () => {
-  assert.equal(GetDefaultWorkerCount(), Math.max(1, Os.cpus().length))
+  expect(GetDefaultWorkerCount()).toBe(Math.max(1, Os.cpus().length))
 })
 
 test('ProbeDomainsWithWorkers preserves selected candidate order', async () => {
@@ -42,8 +41,8 @@ test('ProbeDomainsWithWorkers preserves selected candidate order', async () => {
     RunWorker: Data => Promise.resolve({ Type: 'Result', Result: AliveResult(Data.SourceDomain) })
   })
 
-  assert.deepEqual(Result.ProbeResults.map(ProbeResult => ProbeResult.Domain), ['b.example', 'a.example'])
-  assert.equal(Result.RateLimited, false)
+  expect(Result.ProbeResults.map(ProbeResult => ProbeResult.Domain)).toEqual(['b.example', 'a.example'])
+  expect(Result.RateLimited).toBe(false)
 })
 
 test('ProbeDomainsWithWorkers stops scheduling after a rate limit', async () => {
@@ -61,10 +60,10 @@ test('ProbeDomainsWithWorkers stops scheduling after a rate limit', async () => 
     }
   })
 
-  assert.deepEqual(StartedDomains, ['a.example'])
-  assert.deepEqual(Result.ProbeResults, [])
-  assert.equal(Result.RateLimited, true)
-  assert.equal(Result.RateLimitMessage, 'limited')
+  expect(StartedDomains).toEqual(['a.example'])
+  expect(Result.ProbeResults).toEqual([])
+  expect(Result.RateLimited).toBe(true)
+  expect(Result.RateLimitMessage).toBe('limited')
 })
 
 test('ProbeDomainsWithWorkers records worker failures as unknown probe results', async () => {
@@ -78,8 +77,8 @@ test('ProbeDomainsWithWorkers records worker failures as unknown probe results',
     RunWorker: () => Promise.reject(new Error('worker failed'))
   })
 
-  assert.equal(Result.ProbeResults[0].Domain, 'failed.example')
-  assert.equal(Result.ProbeResults[0].Verdict, 'Unknown')
-  assert.equal(Result.ProbeResults[0].Reason, 'worker failed')
-  assert.equal(Result.ProbeFailedDomains.has('failed.example'), true)
+  expect(Result.ProbeResults[0].Domain).toBe('failed.example')
+  expect(Result.ProbeResults[0].Verdict).toBe('Unknown')
+  expect(Result.ProbeResults[0].Reason).toBe('worker failed')
+  expect(Result.ProbeFailedDomains.has('failed.example')).toBe(true)
 })

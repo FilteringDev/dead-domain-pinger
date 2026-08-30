@@ -70,7 +70,7 @@
       "files": ["tests/**/*.ts"],
       "plugins": ["typescript"],
       "rules": {
-        // node:test's `test()` returns a promise that tests intentionally leave unawaited.
+        // Vitest matcher types may be awaitable, while synchronous expectations are intentionally unawaited.
         "typescript/no-floating-promises": "off"
       }
     }

@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import { DetermineNextProbe, type ProbeTransitionInput } from '../sources/probe-transitions.ts'
 
 function WorkerData(Overrides: Partial<ProbeTransitionInput> = {}): ProbeTransitionInput {
@@ -12,16 +11,16 @@ function WorkerData(Overrides: Partial<ProbeTransitionInput> = {}): ProbeTransit
 }
 
 test('TLS failure on HTTPS queues HTTP for the source domain', () => {
-  assert.deepEqual(DetermineNextProbe(WorkerData(), 'Tls'), { Target: 'example.com', Kind: 'RetryOriginalHttp' })
+  expect(DetermineNextProbe(WorkerData(), 'Tls')).toEqual({ Target: 'example.com', Kind: 'RetryOriginalHttp' })
 })
 
 test('DNS failure queues HTTP only for a registrable-domain root', () => {
-  assert.deepEqual(DetermineNextProbe(WorkerData(), 'Dns'), { Target: 'example.com', Kind: 'RetryOriginalHttp' })
-  assert.equal(DetermineNextProbe(WorkerData({ SourceDomain: 'cdn.example.com' }), 'Dns'), null)
+  expect(DetermineNextProbe(WorkerData(), 'Dns')).toEqual({ Target: 'example.com', Kind: 'RetryOriginalHttp' })
+  expect(DetermineNextProbe(WorkerData({ SourceDomain: 'cdn.example.com' }), 'Dns')).toBe(null)
 })
 
 test('failed root HTTP retry queues www HTTP for the next run', () => {
-  assert.deepEqual(DetermineNextProbe(WorkerData({ Protocol: 'HTTP', PriorityKind: 'RetryOriginalHttp' }), 'Dns'), {
+  expect(DetermineNextProbe(WorkerData({ Protocol: 'HTTP', PriorityKind: 'RetryOriginalHttp' }), 'Dns')).toEqual({
     Target: 'www.example.com',
     Kind: 'TryWwwHttp'
   })

@@ -1,5 +1,4 @@
-import test from 'node:test'
-import assert from 'node:assert/strict'
+import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
@@ -23,7 +22,7 @@ test('pending HTTP work takes priority and replaces the normal HTTPS work for it
   const State = CreateEmptyState()
   QueuePendingProbe(State, 'b.example', 'www.b.example', 'TryWwwHttp')
 
-  assert.deepEqual(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 3), [
+  expect(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 3)).toEqual([
     { SourceDomain: 'b.example', Target: 'www.b.example', Protocol: 'HTTP', PriorityKind: 'TryWwwHttp' },
     { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTPS', PriorityKind: null }
   ])
@@ -33,7 +32,7 @@ test('priority work consumes the same candidate limit as normal work', () => {
   const State = CreateEmptyState()
   QueuePendingProbe(State, 'a.example', 'a.example', 'RetryOriginalHttp')
 
-  assert.deepEqual(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 1), [
+  expect(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 1)).toEqual([
     { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTP', PriorityKind: 'RetryOriginalHttp' }
   ])
 })
@@ -64,5 +63,5 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
     WorkerCount: 2
   })
 
-  assert.deepEqual(Candidates.map(Candidate => Candidate.Domain), ['older.example', 'newer.example'])
+  expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['older.example', 'newer.example'])
 })
