@@ -11,7 +11,7 @@ delete a rule.
 ## Usage
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     # The queue is ordered by git history, which a shallow clone does not have.
     fetch-depth: 0
