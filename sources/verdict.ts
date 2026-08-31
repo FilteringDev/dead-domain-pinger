@@ -1,4 +1,5 @@
 import { registrableDomain } from '@structured-world/structured-public-domains'
+import { IsParkingServiceHost } from './parking-services.ts'
 import type { DomainVerdict } from './types.ts'
 import type { GlobalpingMeasurement, GlobalpingProbeResult } from './globalping.ts'
 
@@ -38,7 +39,7 @@ export type MeasurementEvaluation = {
   Verdict: DomainVerdict
   Reason: string
   Warnings: string[]
-  /** Redirect targets sharing the probed domain's registrable domain — detected, never removed. */
+  /** Redirect targets sharing the probed domain's registrable domain. */
   SameDomainRedirects: string[]
   FailureKind: 'Dns' | 'Tls' | null
 }
@@ -135,8 +136,8 @@ function GetTlsFailureDetail(Result: GlobalpingProbeResult): string {
 
 /**
  * HTTP 2xx and request timeouts count as alive. DNS resolution failures, TLS certificate
- * validation failures and redirects that leave the registrable domain count as dead.
- * Redirects that stay inside the same registrable domain are reported as warnings only.
+ * validation failures, known parking-service redirects and redirects that leave the registrable
+ * domain count as dead. Other redirects inside the same registrable domain are warnings only.
  * Everything else stays unknown so that ambiguous results never delete rules.
  */
 export function EvaluateMeasurement(Domain: string, Measurement: GlobalpingMeasurement): MeasurementEvaluation {
@@ -167,6 +168,19 @@ export function EvaluateMeasurement(Domain: string, Measurement: GlobalpingMeasu
       Warnings,
       SameDomainRedirects,
       FailureKind: 'Tls'
+    }
+  }
+
+  const ParkingRedirectTargets = [...new Set(RedirectTargets.filter(IsParkingServiceHost))]
+  if (ParkingRedirectTargets.length > 0 && RedirectTargets.length === Results.length) {
+    Warnings.push(`removed because it redirects to a known parking service (${ParkingRedirectTargets.join(', ')})`)
+
+    return {
+      Verdict: 'Dead',
+      Reason: `Redirects to a parking service (${ParkingRedirectTargets.join(', ')})`,
+      Warnings,
+      SameDomainRedirects,
+      FailureKind: null
     }
   }
 

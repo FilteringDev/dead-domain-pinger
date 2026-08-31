@@ -33,6 +33,65 @@ test('A redirect to a different registrable domain is dead', () => {
   expect(Result.Warnings.some(Warning => Warning.includes('example.org'))).toBeTruthy()
 })
 
+test('A redirect to GoDaddy parking receives a parking-specific dead verdict', () => {
+  const Result = EvaluateMeasurement('example.com', Measurement({
+    statusCode: 301,
+    resolvedAddress: '1.2.3.4',
+    headers: { location: 'https://FORSALE.GODADDY.COM./listing' }
+  }))
+
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.Reason).toBe('Redirects to a parking service (forsale.godaddy.com)')
+  expect(Result.Warnings).toEqual([
+    'removed because it redirects to a known parking service (forsale.godaddy.com)'
+  ])
+})
+
+test('A same-registrable-domain redirect to GoDaddy parking is dead', () => {
+  const Result = EvaluateMeasurement('shop.godaddy.com', Measurement({
+    statusCode: 301,
+    resolvedAddress: '1.2.3.4',
+    headers: { location: 'https://forsale.godaddy.com/' }
+  }))
+
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.Reason.includes('parking service')).toBe(true)
+})
+
+test('A partial parking redirect does not override a successful probe', () => {
+  const Result = EvaluateMeasurement('example.com', Measurement(
+    {
+      statusCode: 301,
+      resolvedAddress: '1.2.3.4',
+      headers: { location: 'https://forsale.godaddy.com/' }
+    },
+    { statusCode: 200, resolvedAddress: '2.3.4.5' }
+  ))
+
+  expect(Result.Verdict).toBe('Alive')
+  expect(Result.Warnings).toEqual([])
+})
+
+test('A direct successful probe of a parking host stays alive', () => {
+  const Result = EvaluateMeasurement('forsale.godaddy.com', Measurement({
+    statusCode: 200,
+    resolvedAddress: '1.2.3.4'
+  }))
+
+  expect(Result.Verdict).toBe('Alive')
+})
+
+test('A parking-host lookalike uses the ordinary foreign redirect verdict', () => {
+  const Result = EvaluateMeasurement('example.com', Measurement({
+    statusCode: 301,
+    resolvedAddress: '1.2.3.4',
+    headers: { location: 'https://forsale.godaddy.com.example.org/' }
+  }))
+
+  expect(Result.Verdict).toBe('Dead')
+  expect(Result.Reason).toBe('Redirects to a different registrable domain (forsale.godaddy.com.example.org)')
+})
+
 test('A redirect inside the same registrable domain is detected and kept', () => {
   const Result = EvaluateMeasurement('sub.example.com', Measurement({
     statusCode: 301,

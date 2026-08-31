@@ -4,9 +4,10 @@ A GitHub composite action that probes the domains referenced by AdGuard-style fi
 (via [Globalping](https://globalping.io)) and removes the ones that are dead.
 
 A domain is judged dead when DNS resolution fails, when TLS certificate validation fails, or when
-it redirects to a different registrable domain. Redirects that stay inside the same registrable
-domain are only detected and reported; those domains are kept. Ambiguous probe results never
-delete a rule.
+it redirects to a known parking service or a different registrable domain. Known parking targets
+include `forsale.godaddy.com` and take precedence even inside the same registrable domain. Other
+same-domain redirects are only detected and reported; those domains are kept. Ambiguous probe
+results never delete a rule.
 
 ## Usage
 

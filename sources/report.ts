@@ -100,8 +100,9 @@ export function BuildPullRequestBody(Input: ReportInput): string {
     'Domains probed using configured [Globalping](https://globalping.io) locations.',
     '',
     'A domain is treated as dead when DNS resolution fails, when TLS certificate validation fails,',
-    'or when it redirects to a different registrable domain. Redirects that stay inside the same',
-    'registrable domain are only detected and reported — those domains are kept and their',
+    'or when it redirects to a known parking service or a different registrable domain. Other',
+    'redirects that stay inside the same registrable domain are only detected and reported — those',
+    'domains are kept and their',
     'last-modified date is overridden to this run so they are not re-probed daily.',
     ''
   ]
