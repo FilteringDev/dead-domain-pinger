@@ -1,10 +1,15 @@
 import { expect, test } from 'vitest'
-import { GetDomainModifiedTimesWithWorkers } from '../sources/ordering-pool.ts'
+import * as Os from 'node:os'
+import { GetDefaultOrderingWorkerCount, GetDomainModifiedTimesWithWorkers } from '../sources/ordering-pool.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
-function Occurrence(Domain: string, FilePath: string): DomainOccurrence {
-  return { Domain, FilePath, LineNumber: 1, Origin: 'domainList' }
+function Occurrence(Domain: string, FilePath: string, LineNumber = 1): DomainOccurrence {
+  return { Domain, FilePath, LineNumber, Origin: 'domainList' }
 }
+
+test('GetDefaultOrderingWorkerCount uses the available CPU count', () => {
+  expect(GetDefaultOrderingWorkerCount()).toBe(Math.max(1, Os.availableParallelism()))
+})
 
 test('GetDomainModifiedTimesWithWorkers associates results with their file after out-of-order completion', async () => {
   const OccurrencesByFile = new Map([
@@ -48,18 +53,17 @@ test('GetDomainModifiedTimesWithWorkers skips worker creation when no files need
   expect(Result).toEqual(new Map())
 })
 
-test('GetDomainModifiedTimesWithWorkers lazily runs only the configured number of file tasks', async () => {
-  const OccurrencesByFile = new Map<string, ReturnType<typeof Occurrence>[]>()
+test('GetDomainModifiedTimesWithWorkers parallelizes lines from one file up to the configured limit', async () => {
+  const Occurrences: ReturnType<typeof Occurrence>[] = []
   for (let Index = 0; Index < 5; Index += 1) {
-    const FilePath = `${Index}.txt`
-    OccurrencesByFile.set(FilePath, [Occurrence(`${Index}.example`, FilePath)])
+    Occurrences.push(Occurrence(`${Index}.example`, 'list.txt', Index + 1))
   }
   let Active = 0
   let MaximumActive = 0
 
   await GetDomainModifiedTimesWithWorkers({
     WorkingDirectory: '/filters',
-    OccurrencesByFile,
+    OccurrencesByFile: new Map([['list.txt', Occurrences]]),
     FallbackAuthorTime: 100,
     WorkerCount: 2,
     RunWorker: async Task => {
@@ -78,18 +82,71 @@ test('GetDomainModifiedTimesWithWorkers lazily runs only the configured number o
   expect(MaximumActive).toBe(2)
 })
 
+test('GetDomainModifiedTimesWithWorkers keeps domains from the same line in one task', async () => {
+  const TaskSizes: number[] = []
+
+  await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile: new Map([['list.txt', [
+      Occurrence('first.example', 'list.txt', 1),
+      Occurrence('second.example', 'list.txt', 1),
+      Occurrence('third.example', 'list.txt', 2)
+    ]]]),
+    FallbackAuthorTime: 100,
+    WorkerCount: 2,
+    RunWorker: Task => {
+      TaskSizes.push(Task.Occurrences.length)
+      return Promise.resolve({
+        FilePath: Task.FilePath,
+        ModifiedTimes: Task.Occurrences.map(DomainOccurrence => [DomainOccurrence.Domain, 10]),
+        Failures: []
+      })
+    }
+  })
+
+  expect(TaskSizes.sort((Left, Right) => Left - Right)).toEqual([1, 2])
+})
+
+test('GetDomainModifiedTimesWithWorkers merges partial file results using the newest domain time', async () => {
+  const Result = await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile: new Map([['list.txt', [
+      Occurrence('shared.example', 'list.txt', 1),
+      Occurrence('shared.example', 'list.txt', 2)
+    ]]]),
+    FallbackAuthorTime: 100,
+    WorkerCount: 2,
+    RunWorker: async Task => {
+      const LineNumber = Task.Occurrences[0].LineNumber
+      if (LineNumber === 1) {
+        await new Promise(Resolve => setTimeout(Resolve, 10))
+      }
+      return {
+        FilePath: Task.FilePath,
+        ModifiedTimes: [['shared.example', LineNumber === 1 ? 20 : 10]],
+        Failures: []
+      }
+    }
+  })
+
+  expect(Result.get('list.txt')?.get('shared.example')).toBe(20)
+})
+
 test('GetDomainModifiedTimesWithWorkers emits one warning for a degraded file', async () => {
   const Warnings: string[] = []
 
   await GetDomainModifiedTimesWithWorkers({
     WorkingDirectory: '/filters',
-    OccurrencesByFile: new Map([['list.txt', [Occurrence('first.example', 'list.txt')]]]),
+    OccurrencesByFile: new Map([['list.txt', [
+      Occurrence('first.example', 'list.txt', 1),
+      Occurrence('second.example', 'list.txt', 2)
+    ]]]),
     FallbackAuthorTime: 100,
-    WorkerCount: 1,
+    WorkerCount: 2,
     OnWarning: Warning => Warnings.push(Warning),
     RunWorker: Task => Promise.resolve({
       FilePath: Task.FilePath,
-      ModifiedTimes: [['first.example', 100]],
+      ModifiedTimes: Task.Occurrences.map(DomainOccurrence => [DomainOccurrence.Domain, 100]),
       Failures: [
         { Operation: 'blame', Message: 'exit code 1' },
         { Operation: 'file history', Message: 'exit code 1' }

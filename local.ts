@@ -15,7 +15,7 @@ Options:
   --max-candidates COUNT   Maximum probe jobs (default: 50)
   --worker-count COUNT     Probe worker-thread count (default: os.cpus().length)
   --ordering-worker-count COUNT
-                           Git-ordering worker count (default: min(2, available CPUs))
+                           Per-line Git history workers (default: os.availableParallelism())
   --state-path PATH        Optional read-only SQLite state snapshot
   --always-refresh         Ignore all prior state, including queued follow-ups
   -h, --help               Show this help

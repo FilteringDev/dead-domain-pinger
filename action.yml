@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   ordering-worker-count:
-    description: 'Number of Node.js worker threads used for Git/domain ordering (defaults to min(2, available CPUs))'
+    description: 'Maximum concurrent per-line Git history workers (defaults to os.availableParallelism())'
     required: false
     default: ''
   dry-run:

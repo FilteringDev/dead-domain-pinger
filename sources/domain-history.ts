@@ -262,6 +262,7 @@ export async function GetLineBlame(
   }
 
   const SortedLines = RequestedLines ? [...RequestedLines].sort((Left, Right) => Left - Right) : null
+  const LineArguments = SortedLines?.map(LineNumber => `-L${LineNumber},${LineNumber}`) ?? []
   const AuthorTimes = new Map<string, number>()
   let CurrentCommit = ''
   let CurrentStart = 0
@@ -270,7 +271,7 @@ export async function GetLineBlame(
 
   const Outcome = await RunGitRecords(
     WorkingDirectory,
-    ['blame', '--incremental', '--', FilePath],
+    ['blame', '--incremental', ...LineArguments, '--', FilePath],
     '\n',
     Line => {
       const HeaderMatch = /^([0-9a-f]+)\s+\d+\s+(\d+)\s+(\d+)$/u.exec(Line)

@@ -106,7 +106,7 @@ reports whether the preview diff is non-empty.
 | `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for selected-domain probes; when provided, it must be a positive integer |
-| `ordering-worker-count` | `min(2, available CPUs)` | Number of Node.js worker threads used for Git/domain ordering; when provided, it must be a positive integer |
+| `ordering-worker-count` | `os.availableParallelism()` | Maximum number of concurrent per-line Git history workers; when provided, it must be a positive integer |
 | `dry-run` | `false` | Emit a Git diff and Markdown report without modifying the checkout, Git metadata, or persisted state |
 | `globalping-api-token` | - | Required Globalping access token |
 | `create-pr` | `false` | Create a pull request for changed filter files using GitHub CLI |
@@ -292,10 +292,11 @@ refreshes only that domain, and moving or reformatting a rule keeps the dates of
 already carried. This needs the full history, so check the repository out with `fetch-depth: 0`.
 The first run starts with an empty SQLite state when no artifact exists yet.
 
-Git history is searched as a stream with at most `ordering-worker-count` files in flight. The
-default is capped at two workers to keep peak memory bounded on GitHub-hosted runners. Existing
-`worker-count` settings apply only to probing; set `ordering-worker-count` explicitly to tune Git
-ordering throughput.
+Git history is searched as a stream with at most `ordering-worker-count` rule lines in flight.
+Independent lines from the same filter file can run concurrently, so the default uses
+`os.availableParallelism()` to make all CPUs available for ordering. Domains from the same line
+stay together to avoid repeating identical history work. Existing `worker-count` settings apply
+only to probing; lower `ordering-worker-count` on memory-constrained runners.
 
 Selected domains are probed by a separate bounded Node.js worker-thread pool. By default the pool
 size is `os.cpus().length`. Lower `worker-count` if the Globalping quota is tight or if parallel

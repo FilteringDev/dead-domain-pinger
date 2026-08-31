@@ -38,18 +38,21 @@ test('priority work consumes the same candidate limit as normal work', () => {
   ])
 })
 
-test('BuildDomainCandidates keeps global Git ordering across parallel file workers', async () => {
+test('BuildDomainCandidates keeps global Git ordering across parallel line workers in one file', async () => {
   const WorkingDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-candidates-'))
   await RunGit(WorkingDirectory, ['init', '--quiet', '--initial-branch=main'])
   await RunGit(WorkingDirectory, ['config', 'user.email', 'test@example.com'])
   await RunGit(WorkingDirectory, ['config', 'user.name', 'Test'])
 
-  Fs.writeFileSync(Path.join(WorkingDirectory, 'older.txt'), '||ads.example.net^$domain=older.example.com\n')
+  Fs.writeFileSync(Path.join(WorkingDirectory, 'filters.txt'), '||ads.example.net^$domain=older.example.com\n')
   const OlderEnvironment = { GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }
   await RunGit(WorkingDirectory, ['add', '--all'], OlderEnvironment)
   await RunGit(WorkingDirectory, ['commit', '--quiet', '-m', 'Add older'], OlderEnvironment)
 
-  Fs.writeFileSync(Path.join(WorkingDirectory, 'newer.txt'), '||ads.example.net^$domain=newer.example.org\n')
+  Fs.writeFileSync(
+    Path.join(WorkingDirectory, 'filters.txt'),
+    '||ads.example.net^$domain=older.example.com\n||ads.example.net^$domain=newer.example.org\n'
+  )
   const NewerEnvironment = { GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }
   await RunGit(WorkingDirectory, ['add', '--all'], NewerEnvironment)
   await RunGit(WorkingDirectory, ['commit', '--quiet', '-m', 'Add newer'], NewerEnvironment)
@@ -57,8 +60,8 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
   const Candidates = await BuildDomainCandidates({
     WorkingDirectory,
     Occurrences: [
-      { Domain: 'older.example.com', FilePath: 'older.txt', LineNumber: 1, Origin: 'domainList' },
-      { Domain: 'newer.example.org', FilePath: 'newer.txt', LineNumber: 1, Origin: 'domainList' }
+      { Domain: 'older.example.com', FilePath: 'filters.txt', LineNumber: 1, Origin: 'domainList' },
+      { Domain: 'newer.example.org', FilePath: 'filters.txt', LineNumber: 2, Origin: 'domainList' }
     ],
     State: CreateEmptyState(),
     FallbackAuthorTime: 9000,
