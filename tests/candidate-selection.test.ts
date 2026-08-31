@@ -14,7 +14,8 @@ function Candidate(Domain: string): DomainCandidate {
     LastCheckedAt: 0,
     ModifiedAtOverride: 0,
     SortKey: 0,
-    Occurrences: []
+    Occurrences: [],
+    Origins: ['domainList']
   }
 }
 
@@ -23,8 +24,8 @@ test('pending HTTP work takes priority and replaces the normal HTTPS work for it
   QueuePendingProbe(State, 'b.example', 'www.b.example', 'TryWwwHttp')
 
   expect(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 3)).toEqual([
-    { SourceDomain: 'b.example', Target: 'www.b.example', Protocol: 'HTTP', PriorityKind: 'TryWwwHttp' },
-    { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTPS', PriorityKind: null }
+    { SourceDomain: 'b.example', Target: 'www.b.example', Protocol: 'HTTP', PriorityKind: 'TryWwwHttp', Origins: ['domainList'] },
+    { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTPS', PriorityKind: null, Origins: ['domainList'] }
   ])
 })
 
@@ -33,7 +34,7 @@ test('priority work consumes the same candidate limit as normal work', () => {
   QueuePendingProbe(State, 'a.example', 'a.example', 'RetryOriginalHttp')
 
   expect(SelectProbeWork([Candidate('a.example'), Candidate('b.example')], State, 1)).toEqual([
-    { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTP', PriorityKind: 'RetryOriginalHttp' }
+    { SourceDomain: 'a.example', Target: 'a.example', Protocol: 'HTTP', PriorityKind: 'RetryOriginalHttp', Origins: ['domainList'] }
   ])
 })
 
@@ -55,8 +56,8 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
   const Candidates = await BuildDomainCandidates({
     WorkingDirectory,
     Occurrences: [
-      { Domain: 'older.example.com', FilePath: 'older.txt', LineNumber: 1 },
-      { Domain: 'newer.example.org', FilePath: 'newer.txt', LineNumber: 1 }
+      { Domain: 'older.example.com', FilePath: 'older.txt', LineNumber: 1, Origin: 'domainList' },
+      { Domain: 'newer.example.org', FilePath: 'newer.txt', LineNumber: 1, Origin: 'domainList' }
     ],
     State: CreateEmptyState(),
     FallbackAuthorTime: 9000,
@@ -64,4 +65,21 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
   })
 
   expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['older.example.com', 'newer.example.org'])
+
+})
+test('BuildDomainCandidates accumulates every origin for a shared domain', async () => {
+  const Candidates = await BuildDomainCandidates({
+    WorkingDirectory: '/',
+    Occurrences: [
+      { Domain: 'example.com', FilePath: 'list.txt', LineNumber: 1, Origin: 'domainList' },
+      { Domain: 'example.com', FilePath: 'list.txt', LineNumber: 2, Origin: 'networkPattern' }
+    ],
+    State: CreateEmptyState(),
+    FallbackAuthorTime: 1000,
+    WorkerCount: 1
+  })
+
+  expect(Candidates).toHaveLength(1)
+  expect(Candidates[0].Origins).toEqual(['networkPattern', 'domainList'])
+  expect(Candidates[0].Occurrences).toHaveLength(2)
 })

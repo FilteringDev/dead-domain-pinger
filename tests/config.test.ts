@@ -28,5 +28,9 @@ test('config file is read from the workspace root', () => {
   const Directory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-config-'))
   Fs.writeFileSync(Path.join(Directory, GlobalpingConfigFileName), JSON.stringify({ limit: 2, locations: [{ country: 'KR' }] }))
 
-  expect(LoadGlobalpingConfig(Directory)).toEqual({ Limit: 2, Locations: [{ country: 'KR' }] })
+  const Config = LoadGlobalpingConfig(Directory)
+
+  expect(Config.Limit).toBe(2)
+  expect(Config.Locations).toEqual([{ country: 'KR' }])
+  expect(Config.JudgementPreferences.Fingerprint).toMatch(/^[a-f0-9]{64}$/)
 })

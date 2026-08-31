@@ -3,7 +3,7 @@ import { GetDomainModifiedTimesWithWorkers } from '../sources/ordering-pool.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
 function Occurrence(Domain: string, FilePath: string): DomainOccurrence {
-  return { Domain, FilePath, LineNumber: 1 }
+  return { Domain, FilePath, LineNumber: 1, Origin: 'domainList' }
 }
 
 test('GetDomainModifiedTimesWithWorkers associates results with their file after out-of-order completion', async () => {

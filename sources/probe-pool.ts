@@ -3,6 +3,7 @@ import * as Process from 'node:process'
 import { Piscina } from 'piscina'
 import type { DomainProbeResult, ProbeWorkItem } from './types.ts'
 import type { GlobalpingLocation } from './config.ts'
+import { DefaultJudgementPreferences, type ResolvedJudgementPreferences } from './judgement-policy.ts'
 import type { ProbeWorkerData, ProbeWorkerResult, ProbeWorkerSharedData } from './probe-worker.ts'
 
 export type ProbePoolOptions = {
@@ -12,6 +13,7 @@ export type ProbePoolOptions = {
   Limit: number
   CheckedAt: number
   WorkerCount: number
+  JudgementPreferences?: ResolvedJudgementPreferences
   RunWorker?: ProbeRunner
 }
 
@@ -49,21 +51,34 @@ function RunProbeWorker(Pool: Piscina): ProbeRunner {
     SourceDomain: Data.SourceDomain,
     Target: Data.Target,
     Protocol: Data.Protocol,
-    PriorityKind: Data.PriorityKind
+    PriorityKind: Data.PriorityKind,
+    Origins: Data.Origins
+  }, {
+    signal: AbortSignal.timeout(120_000)
   })
 }
 
 function UnknownResult(WorkItem: ProbeWorkItem, ErrorValue: unknown): DomainProbeResult {
+  const Reason = ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue)
+  const Judgements = Object.fromEntries(WorkItem.Origins.map(Origin => [Origin, {
+    Verdict: 'Unknown' as const,
+    Reason,
+    Stage: null,
+    RuleId: null
+  }]))
+
   return {
     Domain: WorkItem.SourceDomain,
     Target: WorkItem.Target,
     Protocol: WorkItem.Protocol,
     Verdict: 'Unknown',
-    Reason: ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue),
+    Reason,
     Warnings: [],
     SameDomainRedirects: [],
     ModifiedAtOverride: null,
-    NextProbe: null
+    NextProbe: null,
+    Judgements,
+    Provisional: false
   }
 }
 
@@ -80,7 +95,13 @@ export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promis
   const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Options.WorkItems.length)
   const Pool = Options.RunWorker
     ? null
-    : CreateProbePool({ ApiToken: Options.ApiToken, Locations: Options.Locations, Limit: Options.Limit, CheckedAt: Options.CheckedAt }, WorkerCount)
+    : CreateProbePool({
+      ApiToken: Options.ApiToken,
+      Locations: Options.Locations,
+      Limit: Options.Limit,
+      CheckedAt: Options.CheckedAt,
+      JudgementPreferences: Options.JudgementPreferences ?? DefaultJudgementPreferences
+    }, WorkerCount)
   const RunWorker = Options.RunWorker ?? RunProbeWorker(Pool!)
   const ProbeResultsByIndex: Array<DomainProbeResult | undefined> = []
   const ProbeFailedDomains = new Set<string>()
@@ -104,10 +125,12 @@ export async function ProbeDomainsWithWorkers(Options: ProbePoolOptions): Promis
           Target: WorkItem.Target,
           Protocol: WorkItem.Protocol,
           PriorityKind: WorkItem.PriorityKind,
+          Origins: WorkItem.Origins,
           ApiToken: Options.ApiToken,
           Locations: Options.Locations,
           Limit: Options.Limit,
-          CheckedAt: Options.CheckedAt
+          CheckedAt: Options.CheckedAt,
+          JudgementPreferences: Options.JudgementPreferences ?? DefaultJudgementPreferences
         })
 
         if (WorkerResult.Type === 'RateLimited') {

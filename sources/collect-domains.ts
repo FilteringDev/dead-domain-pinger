@@ -1,7 +1,7 @@
 import * as Fs from 'node:fs'
 import * as Path from 'node:path'
 import type { DomainOccurrence } from './types.ts'
-import { GetRuleDomains, ParseRule, SplitLines } from './rule-domains.ts'
+import { GetRuleDomainOrigins, ParseRule, SplitLines } from './rule-domains.ts'
 
 /** Extracts every domain occurrence of a single filter list file, keeping 1-based line numbers. */
 export function CollectDomainOccurrencesFromContent(FilePath: string, Content: string): DomainOccurrence[] {
@@ -14,11 +14,12 @@ export function CollectDomainOccurrencesFromContent(FilePath: string, Content: s
       continue
     }
 
-    for (const Domain of new Set(GetRuleDomains(Rule))) {
+    for (const Reference of GetRuleDomainOrigins(Rule)) {
       Occurrences.push({
-        Domain,
+        Domain: Reference.Domain,
         FilePath,
-        LineNumber: Index + 1
+        LineNumber: Index + 1,
+        Origin: Reference.Origin
       })
     }
   }

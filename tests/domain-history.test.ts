@@ -32,7 +32,7 @@ async function Commit(Directory: string, Content: string, AuthorTime: number): P
 }
 
 function Occurrence(Domain: string, LineNumber: number): DomainOccurrence {
-  return { Domain, FilePath: FileName, LineNumber }
+  return { Domain, FilePath: FileName, LineNumber, Origin: 'domainList' }
 }
 
 test('A domain added to an existing rule does not refresh its neighbours', async () => {
@@ -103,7 +103,7 @@ test('Uncommitted files fall back to the given time', async () => {
   Fs.writeFileSync(Path.join(Directory, 'extra.txt'), '||ads.example.net^$domain=fresh.example.dev\n')
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, 'extra.txt', [
-    { Domain: 'fresh.example.dev', FilePath: 'extra.txt', LineNumber: 1 }
+    { Domain: 'fresh.example.dev', FilePath: 'extra.txt', LineNumber: 1, Origin: 'domainList' }
   ], 9000)
 
   expect(ModifiedTimes.get('fresh.example.dev')).toBe(9000)

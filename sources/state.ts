@@ -13,6 +13,7 @@ const SqlWasmPath = Require.resolve('sql.js/dist/sql-wasm.wasm')
 
 const StateSchema = Zod.object({
   Version: Zod.literal(1),
+  PolicyFingerprint: Zod.string().nonempty().optional(),
   Domains: Zod.record(Zod.string(), Zod.object({
     LastCheckedAt: Zod.number(),
     LastVerdict: Zod.enum(['Alive', 'Dead', 'Unknown']),
@@ -68,6 +69,24 @@ function EnsureSchema(Database: InstanceType<(Awaited<ReturnType<typeof InitSqlJ
 
   Database.run('insert or replace into metadata (key, value) values (?, ?)', ['version', '1'])
 }
+function GetMetadata(
+  Database: InstanceType<(Awaited<ReturnType<typeof InitSqlJs>>)['Database']>,
+  Key: string
+): string | null {
+  const Statement = Database.prepare('select value from metadata where key = ?')
+  try {
+    Statement.bind([Key])
+    if (!Statement.step()) {
+      return null
+    }
+
+    const Value = Statement.getAsObject().value
+
+    return typeof Value === 'string' ? Value : null
+  } finally {
+    Statement.free()
+  }
+}
 
 function ParseWarnings(Value: string | null): string[] {
   if (Value === null) {
@@ -81,17 +100,27 @@ function ParseWarnings(Value: string | null): string[] {
   }
 }
 
-export function CreateEmptyState(): DeadDomainState {
-  return { Version: 1, Domains: {}, PendingProbes: {} }
+export function CreateEmptyState(PolicyFingerprint?: string): DeadDomainState {
+  return {
+    Version: 1,
+    ...(PolicyFingerprint ? { PolicyFingerprint } : {}),
+    Domains: {},
+    PendingProbes: {}
+  }
 }
 
 /** Reads the SQLite state carried over from the previous run; falls back to an empty state. */
-export async function LoadState(StateFilePath: string): Promise<DeadDomainState> {
+export async function LoadState(StateFilePath: string, ExpectedPolicyFingerprint?: string): Promise<DeadDomainState> {
   try {
     const Database = await OpenStateDatabase(StateFilePath)
     try {
       EnsureSchema(Database)
-      const State = CreateEmptyState()
+      const StoredPolicyFingerprint = GetMetadata(Database, 'judgement_policy_fingerprint')
+      if (ExpectedPolicyFingerprint && StoredPolicyFingerprint !== ExpectedPolicyFingerprint) {
+        return CreateEmptyState(ExpectedPolicyFingerprint)
+      }
+
+      const State = CreateEmptyState(ExpectedPolicyFingerprint ?? StoredPolicyFingerprint ?? undefined)
 
       const Statement = Database.prepare('select domain, last_checked_at, last_verdict, last_warnings_json, modified_at_override from domain_state order by domain')
       try {
@@ -126,7 +155,7 @@ export async function LoadState(StateFilePath: string): Promise<DeadDomainState>
       Database.close()
     }
   } catch {
-    return CreateEmptyState()
+    return CreateEmptyState(ExpectedPolicyFingerprint)
   }
 }
 
@@ -172,7 +201,7 @@ export function RecordVerdict(
 
 /** Drops entries for domains that no longer exist in the filter lists, then persists the SQLite state. */
 export async function SaveState(StateFilePath: string, State: DeadDomainState, KnownDomains: Set<string>): Promise<void> {
-  const Pruned = CreateEmptyState()
+  const Pruned = CreateEmptyState(State.PolicyFingerprint)
   const TemporaryStateFilePath = Path.join(
     Path.dirname(StateFilePath),
     `.${Path.basename(StateFilePath)}.${randomUUID()}.tmp`
@@ -197,6 +226,14 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
     Database.exec('begin transaction')
     Database.exec('delete from domain_state')
     Database.exec('delete from pending_probe')
+    if (Pruned.PolicyFingerprint) {
+      Database.run('insert or replace into metadata (key, value) values (?, ?)', [
+        'judgement_policy_fingerprint',
+        Pruned.PolicyFingerprint
+      ])
+    } else {
+      Database.run('delete from metadata where key = ?', ['judgement_policy_fingerprint'])
+    }
 
     const Statement = Database.prepare('insert into domain_state (domain, last_checked_at, last_verdict, last_warnings_json, modified_at_override) values (?, ?, ?, ?, ?)')
     try {

@@ -2,7 +2,12 @@ export type DomainOccurrence = {
   Domain: string
   FilePath: string
   LineNumber: number
+  Origin: DomainOrigin
 }
+
+export type DomainOrigin = 'networkPattern' | 'domainList'
+
+export const DomainOrigins: DomainOrigin[] = ['networkPattern', 'domainList']
 
 export type DomainCandidate = {
   Domain: string
@@ -12,6 +17,7 @@ export type DomainCandidate = {
   ModifiedAtOverride: number
   SortKey: number
   Occurrences: DomainOccurrence[]
+  Origins: DomainOrigin[]
 }
 
 export type ProbeProtocol = 'HTTP' | 'HTTPS'
@@ -23,6 +29,7 @@ export type ProbeWorkItem = {
   Target: string
   Protocol: ProbeProtocol
   PriorityKind: PriorityProbeKind | null
+  Origins: DomainOrigin[]
 }
 
 export type PendingProbe = {
@@ -31,6 +38,13 @@ export type PendingProbe = {
 }
 
 export type DomainVerdict = 'Alive' | 'Dead' | 'Unknown'
+
+export type OriginJudgement = {
+  Verdict: DomainVerdict
+  Reason: string
+  Stage: 'Dns' | 'Http' | 'Body' | null
+  RuleId: string | null
+}
 
 export type DomainProbeResult = {
   Domain: string
@@ -42,6 +56,13 @@ export type DomainProbeResult = {
   SameDomainRedirects: string[]
   ModifiedAtOverride: number | null
   NextProbe: PendingProbe | null
+  Judgements: Partial<Record<DomainOrigin, OriginJudgement>>
+  Provisional: boolean
+}
+
+export type DomainRemovalTrigger = {
+  Domain: string
+  Origin: DomainOrigin
 }
 
 export type RuleChange = {
@@ -50,6 +71,7 @@ export type RuleChange = {
   Before: string
   After: string | null
   RemovedDomains: string[]
+  Triggers: DomainRemovalTrigger[]
 }
 
 export type FileRewriteResult = {

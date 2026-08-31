@@ -1,5 +1,6 @@
 import * as AGTree from '@adguard/agtree'
 import { parse as ParseDomain } from 'tldts'
+import type { DomainOrigin } from './types.ts'
 
 export const DomainModifierNames = new Set(['domain', 'from'])
 
@@ -108,12 +109,12 @@ export function GetRuleDomainLists(Filter: AGTree.AnyRule): AGTree.DomainList[] 
 }
 
 /** Normalized domains referenced by a rule's network pattern or non-negated domain lists. */
-export function GetRuleDomains(Filter: AGTree.AnyRule): string[] {
-  const Domains: string[] = []
+export function GetRuleDomainOrigins(Filter: AGTree.AnyRule): { Domain: string, Origin: DomainOrigin }[] {
+  const References: { Domain: string, Origin: DomainOrigin }[] = []
   const PatternDomain = GetNetworkPatternDomain(Filter)
 
   if (PatternDomain) {
-    Domains.push(PatternDomain)
+    References.push({ Domain: PatternDomain, Origin: 'networkPattern' })
   }
 
   for (const DomainList of GetRuleDomainLists(Filter)) {
@@ -124,12 +125,20 @@ export function GetRuleDomains(Filter: AGTree.AnyRule): string[] {
 
       const Normalized = NormalizeDomain(Domain.value)
       if (Normalized) {
-        Domains.push(Normalized)
+        References.push({ Domain: Normalized, Origin: 'domainList' })
       }
     }
   }
 
-  return [...new Set(Domains)]
+  return [...new Map(References.map(Reference => [
+    Reference.Origin + String.fromCharCode(0) + Reference.Domain,
+    Reference
+  ])).values()]
+}
+
+/** Normalized domains referenced by a rule's network pattern or non-negated domain lists. */
+export function GetRuleDomains(Filter: AGTree.AnyRule): string[] {
+  return [...new Set(GetRuleDomainOrigins(Filter).map(Reference => Reference.Domain))]
 }
 
 export function SerializeDomainList(Domains: AGTree.Domain[]): string {

@@ -1,7 +1,9 @@
-import type { DomainProbeResult, RuleChange } from './types.ts'
+import type { DomainOrigin, DomainProbeResult, OriginJudgement, RuleChange } from './types.ts'
 
 export const ReportFileName = 'dead-domain-report.md'
 export const PullRequestBodyFileName = 'pull-request-body.md'
+
+const Code = String.fromCharCode(96)
 
 export type ReportInput = {
   DryRun: boolean
@@ -14,33 +16,69 @@ export type ReportInput = {
   RunUrl: string | null
 }
 
+type JudgementEntry = {
+  Domain: string
+  Origin: DomainOrigin
+  Judgement: OriginJudgement
+}
+
 function GetWarningEntries(ProbeResults: DomainProbeResult[]): { Domain: string, Warning: string }[] {
   return ProbeResults.flatMap(Result => Result.Warnings.map(Warning => ({ Domain: Result.Domain, Warning })))
 }
 
+function GetJudgementEntries(ProbeResults: DomainProbeResult[]): JudgementEntry[] {
+  return ProbeResults.flatMap(Result => {
+    return (Object.entries(Result.Judgements) as [DomainOrigin, OriginJudgement][])
+      .map(([Origin, Judgement]) => ({ Domain: Result.Domain, Origin, Judgement }))
+  })
+}
+
+function FormatTriggers(Change: RuleChange): string {
+  return Change.Triggers
+    .map(Trigger => Code + Trigger.Domain + Code + ' [' + Trigger.Origin + ']')
+    .join(', ')
+}
+
 function BuildBody(Input: ReportInput): string[] {
-  const DeadResults = Input.ProbeResults.filter(Result => Result.Verdict === 'Dead')
+  const Judgements = GetJudgementEntries(Input.ProbeResults)
+  const DeadJudgements = Judgements.filter(Entry => Entry.Judgement.Verdict === 'Dead')
+  const DeadDomainCount = new Set(DeadJudgements.map(Entry => Entry.Domain)).size
   const RedirectResults = Input.ProbeResults.filter(Result => Result.ModifiedAtOverride !== null)
   const Warnings = GetWarningEntries(Input.ProbeResults)
   const FollowUps = Input.ProbeResults.filter(Result => Result.NextProbe !== null)
   const Lines: string[] = []
 
   Lines.push(
-    `- Dry run: \`${Input.DryRun}\``,
-    `- Probed domains: ${Input.ProbeResults.length} / ${Input.SelectedCount}${Input.RateLimited ? ' (stopped early: rate limited)' : ''}`,
-    `- Dead domains: ${DeadResults.length}`,
-    `- Redirects detected (kept): ${RedirectResults.length}`,
-    `- HTTP follow-ups queued: ${FollowUps.length}`,
-    `- Warnings: ${Warnings.length}`,
-    `- Changed files: ${Input.ChangedFiles.length}`,
-    `- Modified rules: ${Input.ModifiedRules.length}`,
-    `- Removed rules: ${Input.RemovedRules.length}`,
+    '- Dry run: ' + Code + Input.DryRun + Code,
+    '- Probed domains: ' + Input.ProbeResults.length + ' / ' + Input.SelectedCount + (Input.RateLimited ? ' (stopped early: rate limited)' : ''),
+    '- Dead domains: ' + DeadDomainCount,
+    '- Dead origin judgements: ' + DeadJudgements.length,
+    '- Redirects detected (kept): ' + RedirectResults.length,
+    '- HTTP follow-ups queued: ' + FollowUps.length,
+    '- Warnings: ' + Warnings.length,
+    '- Changed files: ' + Input.ChangedFiles.length,
+    '- Modified rules: ' + Input.ModifiedRules.length,
+    '- Removed rules: ' + Input.RemovedRules.length,
     ''
   )
 
-  if (DeadResults.length > 0) {
-    Lines.push('### Dead domains', '')
-    Lines.push(...DeadResults.map(Result => `- \`${Result.Domain}\` — ${Result.Reason}`))
+  if (DeadJudgements.length > 0) {
+    Lines.push('### Dead domain origins', '')
+    Lines.push(...DeadJudgements.map(Entry => {
+      const Rule = Entry.Judgement.RuleId ? ' [' + Entry.Judgement.RuleId + ']' : ''
+
+      return '- ' + Code + Entry.Domain + Code + ' [' + Entry.Origin + ']' + Rule + ' — ' + Entry.Judgement.Reason
+    }))
+    Lines.push('')
+  }
+
+  if (Judgements.length > 0) {
+    Lines.push('### Per-origin judgements', '')
+    Lines.push(...Judgements.map(Entry => {
+      const Rule = Entry.Judgement.RuleId ? ' [' + Entry.Judgement.RuleId + ']' : ''
+
+      return '- ' + Code + Entry.Domain + Code + ' [' + Entry.Origin + '] — ' + Entry.Judgement.Verdict + Rule + ' — ' + Entry.Judgement.Reason
+    }))
     Lines.push('')
   }
 
@@ -54,38 +92,45 @@ function BuildBody(Input: ReportInput): string[] {
     )
     Lines.push(...RedirectResults.map(Result => {
       const OverriddenAt = new Date((Result.ModifiedAtOverride ?? 0) * 1000).toISOString()
+      const Targets = Result.SameDomainRedirects.map(Target => Code + Target + Code).join(', ')
 
-      return `- \`${Result.Domain}\` → \`${Result.SameDomainRedirects.join('`, `')}\` — last-modified date overridden to ${OverriddenAt}`
+      return '- ' + Code + Result.Domain + Code + ' → ' + Targets + ' — last-modified date overridden to ' + OverriddenAt
     }))
     Lines.push('')
   }
 
   if (Warnings.length > 0) {
     Lines.push('### Warnings', '')
-    Lines.push(...Warnings.map(Entry => `- \`${Entry.Domain}\` — ${Entry.Warning}`))
+    Lines.push(...Warnings.map(Entry => '- ' + Code + Entry.Domain + Code + ' — ' + Entry.Warning))
     Lines.push('')
   }
 
   if (FollowUps.length > 0) {
     Lines.push('### HTTP follow-ups queued', '')
-    Lines.push(...FollowUps.map(Result => `- \`${Result.Domain}\` -> \`${Result.NextProbe?.Target}\` (${Result.NextProbe?.Kind})`))
+    Lines.push(...FollowUps.map(Result => {
+      return '- ' + Code + Result.Domain + Code + ' -> ' + Code + Result.NextProbe?.Target + Code + ' (' + Result.NextProbe?.Kind + ') — deletion postponed'
+    }))
     Lines.push('')
   }
 
   if (Input.RemovedRules.length > 0) {
     Lines.push('### Removed rules', '')
-    Lines.push(...Input.RemovedRules.map(Change => `- \`${Change.Before}\` (${Change.FilePath}:${Change.LineNumber})`))
+    Lines.push(...Input.RemovedRules.map(Change => {
+      return '- ' + Code + Change.Before + Code + ' (' + Change.FilePath + ':' + Change.LineNumber + ') — triggered by ' + FormatTriggers(Change)
+    }))
     Lines.push('')
   }
 
   if (Input.ModifiedRules.length > 0) {
     Lines.push('### Modified rules', '')
-    Lines.push(...Input.ModifiedRules.map(Change => `- \`${Change.Before}\` → \`${Change.After}\` (${Change.FilePath}:${Change.LineNumber})`))
+    Lines.push(...Input.ModifiedRules.map(Change => {
+      return '- ' + Code + Change.Before + Code + ' → ' + Code + Change.After + Code + ' (' + Change.FilePath + ':' + Change.LineNumber + ') — triggered by ' + FormatTriggers(Change)
+    }))
     Lines.push('')
   }
 
   if (Input.RunUrl) {
-    Lines.push(`Run: ${Input.RunUrl}`, '')
+    Lines.push('Run: ' + Input.RunUrl, '')
   }
 
   return Lines
@@ -97,13 +142,9 @@ export function BuildReportMarkdown(Input: ReportInput): string {
 
 export function BuildPullRequestBody(Input: ReportInput): string {
   const Intro = [
-    'Domains probed using configured [Globalping](https://globalping.io) locations.',
-    '',
-    'A domain is treated as dead when DNS resolution fails, when TLS certificate validation fails,',
-    'or when it redirects to a known parking service or a different registrable domain. Other',
-    'redirects that stay inside the same registrable domain are only detected and reported — those',
-    'domains are kept and their',
-    'last-modified date is overridden to this run so they are not re-probed daily.',
+    'Domains were probed using configured [Globalping](https://globalping.io) locations and',
+    'evaluated with the repository judgement preferences for each AGTree domain origin.',
+    'Ambiguous and provisional results do not remove filter occurrences.',
     ''
   ]
 

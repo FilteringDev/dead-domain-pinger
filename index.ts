@@ -12,9 +12,9 @@ import { DefaultMaxCandidates } from './sources/globalping.ts'
 import { BuildGitDiff, DiffFileName, ResolvePreviewOutputDirectory, WritePreviewArtifacts, type PreviewFileChange } from './sources/preview.ts'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
-import { RewriteFilterContent } from './sources/rewrite-filters.ts'
+import { RewriteFilterContent, type DeadDomainsByOrigin } from './sources/rewrite-filters.ts'
 import { ClearPendingProbe, CreateEmptyState, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
-import type { RuleChange } from './sources/types.ts'
+import { DomainOrigins, type DomainOrigin, type RuleChange } from './sources/types.ts'
 
 const Env = await Zod.object({
   DRY_RUN: Zod.string().default('false').transform(Value => Value === 'true'),
@@ -69,7 +69,9 @@ const Occurrences = CollectDomainOccurrences(WorkingDirectory, FilterFiles)
 const KnownDomains = new Set(Occurrences.map(Occurrence => Occurrence.Domain))
 Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${Occurrences.length} occurrences`)
 
-const State = Env.ALWAYS_REFRESH ? CreateEmptyState() : await LoadState(StateFilePath)
+const State = Env.ALWAYS_REFRESH
+  ? CreateEmptyState(GlobalpingConfig.JudgementPreferences.Fingerprint)
+  : await LoadState(StateFilePath, GlobalpingConfig.JudgementPreferences.Fingerprint)
 
 if (await IsShallowRepository(OrderingWorkingDirectory)) {
   Core.warning('[dead-domain-pinger] The repository is a shallow clone, so every domain looks equally recent — check it out with `fetch-depth: 0`')
@@ -91,7 +93,8 @@ const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = awai
   Locations: GlobalpingConfig.Locations,
   Limit: GlobalpingConfig.Limit,
   CheckedAt,
-  WorkerCount: Env.WORKER_COUNT
+  WorkerCount: Env.WORKER_COUNT,
+  JudgementPreferences: GlobalpingConfig.JudgementPreferences
 })
 
 // SQLite state is owned by the main process; probe workers only return serializable results.
@@ -123,13 +126,34 @@ if (RateLimited) {
   Core.warning(`[dead-domain-pinger] ${RateLimitMessage ?? 'Globalping rate limit reached'} — stopping further probes`)
 }
 
-const DeadDomains = new Set(ProbeResults.filter(Result => Result.Verdict === 'Dead').map(Result => Result.Domain))
-Core.info(`[dead-domain-pinger] ${DeadDomains.size} domains judged dead`)
+const DeadDomainsByOrigin: DeadDomainsByOrigin = {
+  networkPattern: new Set(),
+  domainList: new Set()
+}
+
+for (const Result of ProbeResults) {
+  for (const Origin of DomainOrigins) {
+    if (Result.Judgements[Origin]?.Verdict === 'Dead') {
+      DeadDomainsByOrigin[Origin].add(Result.Domain)
+    }
+  }
+}
+
+const DeadDomainOrigins = Object.fromEntries(
+  [...new Set(DomainOrigins.flatMap(Origin => [...DeadDomainsByOrigin[Origin]]))]
+    .sort((Left, Right) => Left.localeCompare(Right))
+    .map(Domain => [
+      Domain,
+      DomainOrigins.filter(Origin => DeadDomainsByOrigin[Origin].has(Domain))
+    ])
+) as Record<string, DomainOrigin[]>
+const DeadDomains = new Set(Object.keys(DeadDomainOrigins))
+Core.info(`[dead-domain-pinger] ${DeadDomains.size} domains judged dead in at least one origin`)
 
 const AffectedFiles = new Set(
-  Candidates
-    .filter(Candidate => DeadDomains.has(Candidate.Domain))
-    .flatMap(Candidate => Candidate.Occurrences.map(Occurrence => Occurrence.FilePath))
+  Candidates.flatMap(Candidate => Candidate.Occurrences
+    .filter(Occurrence => DeadDomainsByOrigin[Occurrence.Origin].has(Occurrence.Domain))
+    .map(Occurrence => Occurrence.FilePath))
 )
 
 const ModifiedRules: RuleChange[] = []
@@ -140,7 +164,7 @@ const PreviewFileChanges: PreviewFileChange[] = []
 for (const FilePath of [...AffectedFiles].sort((A, B) => A.localeCompare(B))) {
   const AbsolutePath = Path.resolve(WorkingDirectory, FilePath)
   const Content = Fs.readFileSync(AbsolutePath, 'utf-8')
-  const Result = RewriteFilterContent(FilePath, Content, DeadDomains)
+  const Result = RewriteFilterContent(FilePath, Content, DeadDomainsByOrigin)
 
   if (!Result.Changed) {
     continue
@@ -208,7 +232,8 @@ const HasChanges = ChangedFiles.length > 0
 
 if (Process.env.LOCAL_PREVIEW !== 'true') {
   Core.setOutput('has_changes', String(HasChanges))
-  Core.setOutput('dead_domains', JSON.stringify([...DeadDomains]))
+  Core.setOutput('dead_domains', JSON.stringify([...DeadDomains].sort((Left, Right) => Left.localeCompare(Right))))
+  Core.setOutput('dead_domain_origins', JSON.stringify(DeadDomainOrigins))
   Core.setOutput('changed_files', JSON.stringify(ChangedFiles))
   Core.setOutput('probed_count', String(ProbeResults.length))
   Core.setOutput('rate_limited', String(RateLimited))

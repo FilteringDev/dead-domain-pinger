@@ -1,9 +1,17 @@
 import { workerData } from 'piscina'
 import type { GlobalpingLocation } from './config.ts'
 import { GlobalpingRateLimitError, ProbeDomain } from './globalping.ts'
+import type { ResolvedJudgementPreferences } from './judgement-policy.ts'
 import { DetermineNextProbe } from './probe-transitions.ts'
 import { EvaluateMeasurement } from './verdict.ts'
-import type { DomainProbeResult, PriorityProbeKind, ProbeProtocol } from './types.ts'
+import type {
+  DomainOrigin,
+  DomainProbeResult,
+  DomainVerdict,
+  OriginJudgement,
+  PriorityProbeKind,
+  ProbeProtocol
+} from './types.ts'
 
 /** Constant for the whole probe run; cloned once per pooled worker instead of once per task. */
 export type ProbeWorkerSharedData = {
@@ -11,6 +19,7 @@ export type ProbeWorkerSharedData = {
   Limit: number
   ApiToken: string
   CheckedAt: number
+  JudgementPreferences: ResolvedJudgementPreferences
 }
 
 export type ProbeWorkerTask = {
@@ -18,6 +27,7 @@ export type ProbeWorkerTask = {
   Target: string
   Protocol: ProbeProtocol
   PriorityKind: PriorityProbeKind | null
+  Origins: DomainOrigin[]
 }
 
 export type ProbeWorkerData = ProbeWorkerTask & ProbeWorkerSharedData
@@ -37,6 +47,54 @@ function FormatError(ErrorValue: unknown): string {
   return ErrorValue instanceof Error ? ErrorValue.message : String(ErrorValue)
 }
 
+function Summarize(Judgements: Partial<Record<DomainOrigin, OriginJudgement>>, Origins: DomainOrigin[]): {
+  Verdict: DomainVerdict
+  Reason: string
+} {
+  const Values = Origins.map(Origin => Judgements[Origin]).filter((Value): Value is OriginJudgement => Boolean(Value))
+  const Dead = Values.find(Value => Value.Verdict === 'Dead')
+  if (Dead) {
+    return { Verdict: 'Dead', Reason: Dead.Reason }
+  }
+
+  if (Values.length > 0 && Values.every(Value => Value.Verdict === 'Alive')) {
+    return { Verdict: 'Alive', Reason: Values[0].Reason }
+  }
+
+  return {
+    Verdict: 'Unknown',
+    Reason: Values.find(Value => Value.Verdict === 'Unknown')?.Reason ?? 'Origin judgements disagree'
+  }
+}
+
+export function ProvisionalJudgements(
+  Judgements: Partial<Record<DomainOrigin, OriginJudgement>>,
+  Origins: DomainOrigin[],
+  Target: string
+): Partial<Record<DomainOrigin, OriginJudgement>> {
+  return Object.fromEntries(Origins.map(Origin => {
+    const Judgement = Judgements[Origin]
+    if (!Judgement || Judgement.Verdict !== 'Dead') {
+      return [Origin, Judgement]
+    }
+
+    return [Origin, {
+      ...Judgement,
+      Verdict: 'Unknown',
+      Reason: 'Deletion postponed until queued follow-up probe of ' + Target + ' completes'
+    }]
+  }).filter((Entry): Entry is [DomainOrigin, OriginJudgement] => Boolean(Entry[1])))
+}
+
+function UnknownJudgements(Origins: DomainOrigin[], Reason: string): Partial<Record<DomainOrigin, OriginJudgement>> {
+  return Object.fromEntries(Origins.map(Origin => [Origin, {
+    Verdict: 'Unknown',
+    Reason,
+    Stage: null,
+    RuleId: null
+  }]))
+}
+
 async function RunProbe(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
   try {
     const Measurement = await ProbeDomain({
@@ -46,8 +104,23 @@ async function RunProbe(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
       Limit: Data.Limit,
       ApiToken: Data.ApiToken
     })
-    const { Verdict, Reason, Warnings, SameDomainRedirects, FailureKind } = EvaluateMeasurement(Data.Target, Measurement)
-    const ModifiedAtOverride = SameDomainRedirects.length > 0 && Verdict !== 'Dead' ? Data.CheckedAt : null
+    const Evaluation = EvaluateMeasurement(
+      Data.Target,
+      Measurement,
+      Data.Origins,
+      Data.JudgementPreferences
+    )
+    const HasDeadJudgement = Object.values(Evaluation.Judgements).some(Judgement => Judgement?.Verdict === 'Dead')
+    const NextProbe = HasDeadJudgement ? DetermineNextProbe(Data, Evaluation.FailureKind) : null
+    const Judgements = NextProbe
+      ? ProvisionalJudgements(Evaluation.Judgements, Data.Origins, NextProbe.Target)
+      : Evaluation.Judgements
+    const Summary = Summarize(Judgements, Data.Origins)
+    const ModifiedAtOverride = Evaluation.SameDomainRedirects.length > 0
+      && Summary.Verdict !== 'Dead'
+      && NextProbe === null
+      ? Data.CheckedAt
+      : null
 
     return {
       Type: 'Result',
@@ -55,18 +128,23 @@ async function RunProbe(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
         Domain: Data.SourceDomain,
         Target: Data.Target,
         Protocol: Data.Protocol,
-        Verdict,
-        Reason,
-        Warnings,
-        SameDomainRedirects,
+        ...Summary,
+        Warnings: NextProbe
+          ? ['deletion postponed while an HTTP follow-up is pending']
+          : Evaluation.Warnings,
+        SameDomainRedirects: Evaluation.SameDomainRedirects,
         ModifiedAtOverride,
-        NextProbe: DetermineNextProbe(Data, FailureKind)
+        NextProbe,
+        Judgements,
+        Provisional: NextProbe !== null
       }
     }
   } catch (ErrorValue) {
     if (ErrorValue instanceof GlobalpingRateLimitError) {
       return { Type: 'RateLimited', Message: FormatError(ErrorValue) }
     }
+
+    const Reason = FormatError(ErrorValue)
 
     return {
       Type: 'ProbeFailed',
@@ -75,11 +153,13 @@ async function RunProbe(Data: ProbeWorkerData): Promise<ProbeWorkerResult> {
         Target: Data.Target,
         Protocol: Data.Protocol,
         Verdict: 'Unknown',
-        Reason: FormatError(ErrorValue),
+        Reason,
         Warnings: [],
         SameDomainRedirects: [],
         ModifiedAtOverride: null,
-        NextProbe: null
+        NextProbe: null,
+        Judgements: UnknownJudgements(Data.Origins, Reason),
+        Provisional: false
       }
     }
   }

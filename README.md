@@ -3,7 +3,7 @@
 A GitHub composite action that probes the domains referenced by AdGuard-style filter list rules
 (via [Globalping](https://globalping.io)) and removes the ones that are dead.
 
-A domain is judged dead when DNS resolution fails, when TLS certificate validation fails, or when
+By default, a domain is judged dead when DNS resolution fails, when TLS certificate validation fails, or when
 it redirects to a known parking service or a different registrable domain. Known parking targets
 include `forsale.godaddy.com` and take precedence even inside the same registrable domain. Other
 same-domain redirects are only detected and reported; those domains are kept. Ambiguous probe
@@ -131,11 +131,126 @@ When the file is absent, or either field is omitted, the action uses `limit: 5` 
 `eyeball-network` probe each from the US, Europe, Korea, Japan, and India. An invalid config
 file fails the workflow instead of silently changing the requested measurement.
 
+### Judgement preferences
+
+The same config file can replace the automated judgement policy. Policies are evaluated separately
+for the two AGTree origin types:
+
+- `networkPattern`: a hostname from an anchored network pattern such as `||example.com^`.
+- `domainList`: a non-negated hostname from a cosmetic prefix or a `$domain`/`$from` modifier.
+
+Policy layers are applied in this order: built-in policy, `default`, then the matching origin policy.
+Each configured `dns`, `http`, or `body` array replaces that whole stage from the preceding layer;
+an empty array disables the stage. Omitted stages continue to inherit. Rule IDs must be unique across
+an effective policy. Rules run in array order, and the first matching `alive`, `dead`, or `unknown`
+verdict is terminal. A matching `continue` rule skips the rest of its stage and advances to the next
+stage. Falling through every stage produces `Unknown`,
+which never removes an occurrence.
+
+This example treats a 404 majority as dead only for network-pattern occurrences while leaving the
+built-in policy unchanged for domain-list occurrences:
+
+```json
+{
+  "judgementPreferences": {
+    "networkPattern": {
+      "http": [
+        {
+          "id": "network-pattern-404-majority",
+          "when": {
+            "signal": "statusCode",
+            "values": [404],
+            "minimumMatches": 3,
+            "minimumRatio": 0.6
+          },
+          "verdict": "dead"
+        }
+      ]
+    }
+  }
+}
+```
+
+Both `minimumMatches` (default `1`) and optional `minimumRatio` must pass. The ratio denominator is
+every result returned by Globalping, including results that do not contain the selected signal.
+Conditions can be composed recursively with `{ "all": [...] }`, `{ "any": [...] }`, and
+`{ "not": ... }`.
+
+Available signals are stage-specific:
+
+| Stage | Signals | Extra fields |
+| --- | --- | --- |
+| `dns` | `dnsResolved`, `dnsFailure` | - |
+| `http` | `tlsValidationFailure`, `timeout`, `redirect`, `parkingRedirect`, `foreignRedirect`, `sameDomainRedirect`, `statusCode`, `probeFailure` | `statusCode` requires `values`, containing exact codes or `1xx` through `5xx` |
+| `body` | `bodyPresent`, `bodyTruncated`, `parkingProvider`, `bodyMatcher` | `parkingProvider` accepts `providers`; `bodyMatcher` requires `matcher` |
+
+DNS signals use resolution evidence already returned by the Globalping HTTP measurement; they do
+not create a separate DNS measurement. Body inspection is limited to the first 10 KiB and is
+disabled by the built-in policy. Built-in parking body providers are `godaddy`, `sedo`, `bodis`,
+`hugeDomains`, and `namecheap`. Response bodies are never copied into results or reports.
+
+Custom body matchers are native literal or regular-expression matchers. Regular-expression flags
+are limited to `i`, `m`, `s`, and `u`:
+
+```json
+{
+  "judgementPreferences": {
+    "matchers": {
+      "expired-page": {
+        "type": "regex",
+        "pattern": "domain\\s+(?:expired|for sale)",
+        "flags": "iu"
+      }
+    },
+    "default": {
+      "http": [
+        {
+          "id": "inspect-success-body",
+          "when": { "signal": "statusCode", "values": ["2xx"] },
+          "verdict": "continue"
+        }
+      ],
+      "body": [
+        {
+          "id": "expired-body",
+          "when": {
+            "any": [
+              { "signal": "parkingProvider" },
+              { "signal": "bodyMatcher", "matcher": "expired-page" }
+            ]
+          },
+          "verdict": "dead"
+        }
+      ]
+    }
+  }
+}
+```
+
+Because a configured stage is a replacement, the abbreviated HTTP stage above intentionally omits
+the built-in TLS, redirect, and timeout rules. Production policies should restate any inherited
+rules they still need. Configuration is bounded to 100 rules per stage, 100 body matchers,
+1,024 characters per matcher pattern, 12 expression levels, and 256 expression nodes.
+
+The built-in policy is equivalent to these ordered decisions:
+
+1. All probes report DNS failure: `Dead`.
+2. All probes report TLS validation failure: `Dead`.
+3. All probes redirect and at least one redirects to a known parking host: `Dead`.
+4. All probes redirect and at least one redirects to a foreign registrable domain: `Dead`.
+5. At least one probe returns HTTP 2xx: `Alive`.
+6. At least one probe times out: `Alive`.
+7. Otherwise: `Unknown`.
+
+When the effective policy changes, its fingerprint changes and persisted verdict ages and queued
+follow-ups are invalidated so every candidate is reconsidered under the new preferences.
+
 HTTPS TLS failures are queued for an HTTP retry before ordinary candidates in the next workflow
 run. For a registrable-domain root with DNS or TLS failure, its HTTP retry is attempted first;
 if that also has DNS or TLS failure, `www.<domain>` is queued over HTTP for the following run.
-Each queued probe counts toward `max-candidates`, and a dead queued result removes the source
-filter-domain rule.
+Each queued probe counts toward `max-candidates`. A dead judgement remains provisional while a
+follow-up is queued, so deletion is postponed; only a terminal dead follow-up removes occurrences
+for the origin types that its policy judged dead.
 
 ## Outputs
 
@@ -143,6 +258,7 @@ filter-domain rule.
 | --- | --- |
 | `has_changes` | Whether any filter list change was applied or proposed by a dry run |
 | `dead_domains` | JSON array of domains judged dead in this run |
+| `dead_domain_origins` | JSON object mapping each dead domain to the origin types judged dead (`networkPattern` and/or `domainList`) |
 | `changed_files` | JSON array of filter list files that were changed |
 | `probed_count` | Number of domains actually probed in this run |
 | `rate_limited` | Whether probing stopped early because of a Globalping rate limit |

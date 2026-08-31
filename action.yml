@@ -66,6 +66,9 @@ outputs:
   dead_domains:
     description: 'JSON array of domains judged dead in this run'
     value: ${{ steps.run.outputs.dead_domains }}
+  dead_domain_origins:
+    description: 'JSON object mapping domains to AGTree origin types judged dead in this run'
+    value: ${{ steps.run.outputs.dead_domain_origins }}
   changed_files:
     description: 'JSON array of filter list files that were changed'
     value: ${{ steps.run.outputs.changed_files }}

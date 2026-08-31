@@ -1,4 +1,4 @@
-import type { DomainCandidate, DomainOccurrence, ProbeWorkItem } from './types.ts'
+import { DomainOrigins, type DomainCandidate, type DomainOccurrence, type ProbeWorkItem } from './types.ts'
 import { GetLastCheckedAt, GetModifiedAtOverride, type DeadDomainState } from './state.ts'
 import { GetDomainModifiedTimesWithWorkers } from './ordering-pool.ts'
 import { GetDefaultWorkerCount } from './probe-pool.ts'
@@ -41,12 +41,18 @@ export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Pr
         LastCheckedAt,
         ModifiedAtOverride,
         SortKey: Math.max(ModifiedAt, LastCheckedAt, ModifiedAtOverride),
-        Occurrences: [Occurrence]
+        Occurrences: [Occurrence],
+        Origins: [Occurrence.Origin]
       })
       continue
     }
 
     Existing.Occurrences.push(Occurrence)
+    if (!Existing.Origins.includes(Occurrence.Origin)) {
+      Existing.Origins.push(Occurrence.Origin)
+      Existing.Origins.sort((Left, Right) => DomainOrigins.indexOf(Left) - DomainOrigins.indexOf(Right))
+    }
+
     // The most recent mention of a domain decides how "fresh" that domain is.
     Existing.LatestModifiedAt = Math.max(Existing.LatestModifiedAt, ModifiedAt)
     Existing.SortKey = Math.max(Existing.LatestModifiedAt, Existing.LastCheckedAt, Existing.ModifiedAtOverride)
@@ -72,7 +78,8 @@ export function SelectProbeWork(Candidates: DomainCandidate[], State: DeadDomain
       SourceDomain,
       Target: PendingProbe.Target,
       Protocol: 'HTTP' as const,
-      PriorityKind: PendingProbe.Kind
+      PriorityKind: PendingProbe.Kind,
+      Origins: CandidatesByDomain.get(SourceDomain)?.Origins ?? []
     }))
 
   const PendingDomains = new Set(PriorityWork.map(Work => Work.SourceDomain))
@@ -82,7 +89,8 @@ export function SelectProbeWork(Candidates: DomainCandidate[], State: DeadDomain
       SourceDomain: Candidate.Domain,
       Target: Candidate.Domain,
       Protocol: 'HTTPS' as const,
-      PriorityKind: null
+      PriorityKind: null,
+      Origins: Candidate.Origins
     }))
 
   return [...PriorityWork, ...NormalWork].slice(0, MaxWorkItems)

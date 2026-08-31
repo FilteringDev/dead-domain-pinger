@@ -7,8 +7,8 @@ import { ClearPendingProbe, CreateEmptyState, GetModifiedAtOverride, GetPendingP
 import type { DomainOccurrence } from '../sources/types.ts'
 
 const Occurrences: DomainOccurrence[] = [
-  { Domain: 'old.example', FilePath: 'a.txt', LineNumber: 1 },
-  { Domain: 'redirected.example', FilePath: 'a.txt', LineNumber: 2 }
+  { Domain: 'old.example', FilePath: 'a.txt', LineNumber: 1, Origin: 'domainList' },
+  { Domain: 'redirected.example', FilePath: 'a.txt', LineNumber: 2, Origin: 'domainList' }
 ]
 
 test('RecordVerdict persists a modification date override', () => {
@@ -98,4 +98,22 @@ test('SQLite state falls back to empty when corrupt', async () => {
   const LoadedState = await LoadState(StateFilePath)
 
   expect(LoadedState).toEqual(CreateEmptyState())
+})
+
+test('a policy fingerprint change invalidates verdict ages and pending retries', async () => {
+  const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
+  const StateFilePath = Path.join(StateDirectory, StateFileName)
+  const State = CreateEmptyState('old-policy')
+  RecordVerdict(State, 'example.com', 'Dead', 2000, ['warning'])
+  QueuePendingProbe(State, 'example.com', 'example.com', 'RetryOriginalHttp')
+
+  await SaveState(StateFilePath, State, new Set(['example.com']))
+
+  const Matching = await LoadState(StateFilePath, 'old-policy')
+  expect(Matching.PolicyFingerprint).toBe('old-policy')
+  expect(Matching.Domains['example.com'].LastCheckedAt).toBe(2000)
+  expect(Matching.PendingProbes['example.com']).toBeDefined()
+
+  const Invalidated = await LoadState(StateFilePath, 'new-policy')
+  expect(Invalidated).toEqual(CreateEmptyState('new-policy'))
 })

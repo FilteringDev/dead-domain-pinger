@@ -1,5 +1,5 @@
 import * as AGTree from '@adguard/agtree'
-import type { FileRewriteResult, RuleChange } from './types.ts'
+import type { DomainOrigin, DomainRemovalTrigger, FileRewriteResult, RuleChange } from './types.ts'
 import {
   DomainModifierNames,
   GetNetworkPatternDomain,
@@ -12,10 +12,21 @@ import {
   SplitLines
 } from './rule-domains.ts'
 
+export type DeadDomainsByOrigin = Record<DomainOrigin, Set<string>>
+type DeadDomainInput = Set<string> | DeadDomainsByOrigin
+
 type DomainListRewrite = {
   RemovedDomains: string[]
   HadPermittedDomains: boolean
   HasPermittedDomains: boolean
+}
+
+function ResolveDeadDomains(Input: DeadDomainInput): DeadDomainsByOrigin {
+  if (Input instanceof Set) {
+    return { networkPattern: Input, domainList: Input }
+  }
+
+  return Input
 }
 
 function CountPermitted(Domains: AGTree.Domain[]): number {
@@ -78,30 +89,35 @@ function RewriteModifiers(Modifiers: AGTree.ModifierList | undefined, DeadDomain
 type RuleRewriteResult = {
   Text: string | null
   RemovedDomains: string[]
+  Triggers: DomainRemovalTrigger[]
 }
 
 /**
- * Removes dead domains from a single rule.
- * Returns `null` text when the rule loses every domain it was restricted to, because such a rule
- * would silently become a global one.
+ * Removes dead domain occurrences from a single rule.
+ * Returns null text when a dead pattern makes the rule useless or a scoped rule would become global.
  */
-export function RewriteRule(RawRule: string, DeadDomains: Set<string>): RuleRewriteResult {
+export function RewriteRule(RawRule: string, DeadDomainInputValue: DeadDomainInput): RuleRewriteResult {
   const Rule = ParseRule(RawRule)
+  const DeadDomains = ResolveDeadDomains(DeadDomainInputValue)
 
   if (!Rule || (!IsCosmeticRule(Rule) && !IsNetworkRule(Rule))) {
-    return { Text: RawRule, RemovedDomains: [] }
+    return { Text: RawRule, RemovedDomains: [], Triggers: [] }
   }
 
   const PatternDomain = GetNetworkPatternDomain(Rule)
-  if (PatternDomain && DeadDomains.has(PatternDomain)) {
-    return { Text: null, RemovedDomains: [PatternDomain] }
+  if (PatternDomain && DeadDomains.networkPattern.has(PatternDomain)) {
+    return {
+      Text: null,
+      RemovedDomains: [PatternDomain],
+      Triggers: [{ Domain: PatternDomain, Origin: 'networkPattern' }]
+    }
   }
 
   const NewRule = structuredClone(Rule)
   const Rewrites: DomainListRewrite[] = []
 
   if (IsCosmeticRule(NewRule) && NewRule.domains) {
-    const { Kept, Rewrite } = RewriteDomainListChildren(NewRule.domains.children, DeadDomains)
+    const { Kept, Rewrite } = RewriteDomainListChildren(NewRule.domains.children, DeadDomains.domainList)
 
     if (Rewrite.RemovedDomains.length > 0) {
       NewRule.domains.children = Kept
@@ -109,22 +125,27 @@ export function RewriteRule(RawRule: string, DeadDomains: Set<string>): RuleRewr
     }
   }
 
-  Rewrites.push(...RewriteModifiers(NewRule.modifiers, DeadDomains))
+  Rewrites.push(...RewriteModifiers(NewRule.modifiers, DeadDomains.domainList))
 
   const RemovedDomains = Rewrites.flatMap(Rewrite => Rewrite.RemovedDomains)
+  const Triggers = RemovedDomains.map(Domain => ({ Domain, Origin: 'domainList' as const }))
   if (RemovedDomains.length === 0) {
-    return { Text: RawRule, RemovedDomains: [] }
+    return { Text: RawRule, RemovedDomains: [], Triggers: [] }
   }
 
   const LostAllDomains = Rewrites.some(Rewrite => Rewrite.HadPermittedDomains && !Rewrite.HasPermittedDomains)
   if (LostAllDomains) {
-    return { Text: null, RemovedDomains }
+    return { Text: null, RemovedDomains, Triggers }
   }
 
-  return { Text: AGTree.RuleGenerator.generate(NewRule), RemovedDomains }
+  return { Text: AGTree.RuleGenerator.generate(NewRule), RemovedDomains, Triggers }
 }
 
-export function RewriteFilterContent(FilePath: string, Content: string, DeadDomains: Set<string>): FileRewriteResult {
+export function RewriteFilterContent(
+  FilePath: string,
+  Content: string,
+  DeadDomainInputValue: DeadDomainInput
+): FileRewriteResult {
   const Lines = SplitLines(Content)
   const OutputParts: string[] = []
   const ModifiedRules: RuleChange[] = []
@@ -132,7 +153,7 @@ export function RewriteFilterContent(FilePath: string, Content: string, DeadDoma
 
   for (let Index = 0; Index < Lines.length; Index += 1) {
     const Line = Lines[Index]
-    const { Text, RemovedDomains } = RewriteRule(Line.Text, DeadDomains)
+    const { Text, RemovedDomains, Triggers } = RewriteRule(Line.Text, DeadDomainInputValue)
 
     if (RemovedDomains.length === 0) {
       OutputParts.push(Line.Text + Line.LineEnding)
@@ -144,7 +165,8 @@ export function RewriteFilterContent(FilePath: string, Content: string, DeadDoma
       LineNumber: Index + 1,
       Before: Line.Text,
       After: Text,
-      RemovedDomains
+      RemovedDomains,
+      Triggers
     }
 
     if (Text === null) {

@@ -8,7 +8,8 @@ function WorkItem(Domain: string): ProbeWorkItem {
     SourceDomain: Domain,
     Target: Domain,
     Protocol: 'HTTPS',
-    PriorityKind: null
+    PriorityKind: null,
+    Origins: ['networkPattern']
   }
 }
 
@@ -22,7 +23,11 @@ function AliveResult(Domain: string): DomainProbeResult {
     Warnings: [],
     SameDomainRedirects: [],
     ModifiedAtOverride: null,
-    NextProbe: null
+    NextProbe: null,
+    Judgements: {
+      networkPattern: { Verdict: 'Alive', Reason: 'ok', Stage: 'Http', RuleId: 'test' }
+    },
+    Provisional: false
   }
 }
 

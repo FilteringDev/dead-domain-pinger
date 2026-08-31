@@ -106,8 +106,34 @@ test('CollectDomainOccurrencesFromContent reports line numbers and skips non-dom
   ].join('\n')
 
   expect(CollectDomainOccurrencesFromContent('test.txt', Content)).toEqual([
-    { Domain: 'example.com', FilePath: 'test.txt', LineNumber: 2 },
-    { Domain: 'ads.example.net', FilePath: 'test.txt', LineNumber: 3 },
-    { Domain: 'shop.example.org', FilePath: 'test.txt', LineNumber: 3 }
+    { Domain: 'example.com', FilePath: 'test.txt', LineNumber: 2, Origin: 'domainList' },
+    { Domain: 'ads.example.net', FilePath: 'test.txt', LineNumber: 3, Origin: 'networkPattern' },
+    { Domain: 'shop.example.org', FilePath: 'test.txt', LineNumber: 3, Origin: 'domainList' }
   ])
+})
+
+test('origin-specific dead sets do not cross-remove occurrences', () => {
+  const PatternOnly = {
+    networkPattern: new Set(['example.com']),
+    domainList: new Set<string>()
+  }
+  const ListOnly = {
+    networkPattern: new Set<string>(),
+    domainList: new Set(['example.com'])
+  }
+
+  expect(RewriteRule('example.com##.ads', PatternOnly).Text).toBe('example.com##.ads')
+  expect(RewriteRule('||example.com^', ListOnly).Text).toBe('||example.com^')
+  expect(RewriteRule('||example.com^', PatternOnly).Text).toBe(null)
+  expect(RewriteRule('example.com##.ads', ListOnly).Text).toBe(null)
+})
+
+test('structural rule removal reports the origin that triggered it', () => {
+  const Result = RewriteRule('||tracker.example^$domain=example.com', {
+    networkPattern: new Set<string>(),
+    domainList: new Set(['example.com'])
+  })
+
+  expect(Result.Text).toBe(null)
+  expect(Result.Triggers).toEqual([{ Domain: 'example.com', Origin: 'domainList' }])
 })

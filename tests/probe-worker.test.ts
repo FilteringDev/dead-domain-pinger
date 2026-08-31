@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
 import { DetermineNextProbe, type ProbeTransitionInput } from '../sources/probe-transitions.ts'
+import { ProvisionalJudgements } from '../sources/probe-worker.ts'
 
 function WorkerData(Overrides: Partial<ProbeTransitionInput> = {}): ProbeTransitionInput {
   return {
@@ -24,4 +25,27 @@ test('failed root HTTP retry queues www HTTP for the next run', () => {
     Target: 'www.example.com',
     Kind: 'TryWwwHttp'
   })
+})
+
+test('queued follow-ups postpone every dead origin judgement', () => {
+  const Judgements = ProvisionalJudgements({
+    networkPattern: {
+      Verdict: 'Dead',
+      Reason: 'DNS failed',
+      Stage: 'Dns',
+      RuleId: 'dns-dead'
+    },
+    domainList: {
+      Verdict: 'Alive',
+      Reason: 'kept',
+      Stage: 'Dns',
+      RuleId: 'dns-alive'
+    }
+  }, ['networkPattern', 'domainList'], 'example.com')
+
+  expect(Judgements.networkPattern).toMatchObject({
+    Verdict: 'Unknown',
+    Reason: 'Deletion postponed until queued follow-up probe of example.com completes'
+  })
+  expect(Judgements.domainList?.Verdict).toBe('Alive')
 })
