@@ -25,7 +25,6 @@
     "@structured-world/structured-public-domains": "^0.0.25",
     "@typescriptprime/securereq": "^2.0.0",
     "piscina": "^5.3.1",
-    "simple-git": "^3.36.0",
     "sql.js": "^1.14.2",
     "tldts": "^7.4.11",
     "zod": "^4.4.3"

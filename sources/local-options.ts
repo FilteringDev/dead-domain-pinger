@@ -13,6 +13,7 @@ export type LocalOptions = {
   FileExtension: string
   MaxCandidates: string
   WorkerCount: string
+  OrderingWorkerCount: string
   StatePath: string | null
   AlwaysRefresh: boolean
 }
@@ -48,6 +49,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       'file-extension': { type: 'string', default: '.txt' },
       'max-candidates': { type: 'string' },
       'worker-count': { type: 'string' },
+      'ordering-worker-count': { type: 'string' },
       'state-path': { type: 'string' },
       'always-refresh': { type: 'boolean', default: false }
     },
@@ -64,6 +66,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       FileExtension: '.txt',
       MaxCandidates: String(DefaultMaxCandidates),
       WorkerCount: '',
+      OrderingWorkerCount: '',
       StatePath: null,
       AlwaysRefresh: false
     }
@@ -92,6 +95,9 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     WorkerCount: Parsed.values['worker-count']
       ? ParsePositiveInteger(Parsed.values['worker-count'], '--worker-count', '')
       : '',
+    OrderingWorkerCount: Parsed.values['ordering-worker-count']
+      ? ParsePositiveInteger(Parsed.values['ordering-worker-count'], '--ordering-worker-count', '')
+      : '',
     StatePath,
     AlwaysRefresh
   }
@@ -105,6 +111,7 @@ export function ApplyLocalEnvironment(Options: LocalOptions): void {
   Process.env.FILE_EXTENSION = Options.FileExtension
   Process.env.MAX_CANDIDATES = Options.MaxCandidates
   Process.env.WORKER_COUNT = Options.WorkerCount
+  Process.env.ORDERING_WORKER_COUNT = Options.OrderingWorkerCount
   Process.env.STATE_DIRECTORY = 'dead-domain-state'
   Process.env.DRY_RUN = 'true'
   Process.env.ALWAYS_REFRESH = String(Options.AlwaysRefresh)

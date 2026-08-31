@@ -30,6 +30,7 @@ test('ParseLocalOptions accepts the pnpm separator and provides local defaults',
     FileExtension: '.txt',
     MaxCandidates: '50',
     WorkerCount: '',
+    OrderingWorkerCount: '',
     StatePath: null,
     AlwaysRefresh: false
   })
@@ -45,6 +46,7 @@ test('ParseLocalOptions handles tuning flags and validates refresh state', () =>
     '--file-extension', '.list',
     '--max-candidates', '12',
     '--worker-count', '3',
+    '--ordering-worker-count', '2',
     '--state-path', StatePath
   ], Paths.RootDirectory)
 
@@ -53,6 +55,7 @@ test('ParseLocalOptions handles tuning flags and validates refresh state', () =>
     FileExtension: '.list',
     MaxCandidates: '12',
     WorkerCount: '3',
+    OrderingWorkerCount: '2',
     StatePath
   })
 
@@ -73,6 +76,11 @@ test('ParseLocalOptions rejects missing paths, invalid counts and checkout-conta
     '--output', Paths.OutputDirectory,
     '--max-candidates', '0'
   ], Paths.RootDirectory)).toThrow('--max-candidates must be a positive integer')
+  expect(() => ParseLocalOptions([
+    '--workspace', Paths.WorkingDirectory,
+    '--output', Paths.OutputDirectory,
+    '--ordering-worker-count', '0'
+  ], Paths.RootDirectory)).toThrow('--ordering-worker-count must be a positive integer')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
     '--output', Path.join(Paths.WorkingDirectory, 'preview')
@@ -98,6 +106,7 @@ test('ApplyLocalEnvironment forces preview mode and clears state for always-refr
     expect(Process.env.LOCAL_PREVIEW).toBe('true')
     expect(Process.env.SQLITE_STATE_PATH).toBeUndefined()
     expect(Process.env.GIT_OPTIONAL_LOCKS).toBe('0')
+    expect(Process.env.ORDERING_WORKER_COUNT).toBe('')
   } finally {
     for (const Name of Object.keys(Process.env)) {
       if (!(Name in PreviousEnvironment)) {

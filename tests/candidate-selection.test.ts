@@ -2,10 +2,10 @@ import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
-import { simpleGit } from 'simple-git'
 import { BuildDomainCandidates, SelectProbeWork } from '../sources/candidate-selection.ts'
 import { CreateEmptyState, QueuePendingProbe } from '../sources/state.ts'
 import type { DomainCandidate } from '../sources/types.ts'
+import { RunGit } from './git.ts'
 
 function Candidate(Domain: string): DomainCandidate {
   return {
@@ -40,18 +40,19 @@ test('priority work consumes the same candidate limit as normal work', () => {
 
 test('BuildDomainCandidates keeps global Git ordering across parallel file workers', async () => {
   const WorkingDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-candidates-'))
-  const Git = simpleGit({ baseDir: WorkingDirectory })
-  await Git.init(['--quiet', '--initial-branch=main'])
-  await Git.addConfig('user.email', 'test@example.com')
-  await Git.addConfig('user.name', 'Test')
+  await RunGit(WorkingDirectory, ['init', '--quiet', '--initial-branch=main'])
+  await RunGit(WorkingDirectory, ['config', 'user.email', 'test@example.com'])
+  await RunGit(WorkingDirectory, ['config', 'user.name', 'Test'])
 
   Fs.writeFileSync(Path.join(WorkingDirectory, 'older.txt'), '||ads.example.net^$domain=older.example.com\n')
-  await Git.env({ GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }).add('--all')
-  await Git.env({ GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }).commit('Add older', ['--quiet'])
+  const OlderEnvironment = { GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }
+  await RunGit(WorkingDirectory, ['add', '--all'], OlderEnvironment)
+  await RunGit(WorkingDirectory, ['commit', '--quiet', '-m', 'Add older'], OlderEnvironment)
 
   Fs.writeFileSync(Path.join(WorkingDirectory, 'newer.txt'), '||ads.example.net^$domain=newer.example.org\n')
-  await Git.env({ GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }).add('--all')
-  await Git.env({ GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }).commit('Add newer', ['--quiet'])
+  const NewerEnvironment = { GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }
+  await RunGit(WorkingDirectory, ['add', '--all'], NewerEnvironment)
+  await RunGit(WorkingDirectory, ['commit', '--quiet', '-m', 'Add newer'], NewerEnvironment)
 
   const Candidates = await BuildDomainCandidates({
     WorkingDirectory,
@@ -61,7 +62,7 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
     ],
     State: CreateEmptyState(),
     FallbackAuthorTime: 9000,
-    WorkerCount: 2
+    OrderingWorkerCount: 2
   })
 
   expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['older.example.com', 'newer.example.org'])
@@ -76,7 +77,7 @@ test('BuildDomainCandidates accumulates every origin for a shared domain', async
     ],
     State: CreateEmptyState(),
     FallbackAuthorTime: 1000,
-    WorkerCount: 1
+    OrderingWorkerCount: 1
   })
 
   expect(Candidates).toHaveLength(1)

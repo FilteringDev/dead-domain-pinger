@@ -9,6 +9,7 @@ import { LoadGlobalpingConfig } from './sources/config.ts'
 import { IsShallowRepository } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
 import { DefaultMaxCandidates } from './sources/globalping.ts'
+import { GetDefaultOrderingWorkerCount } from './sources/ordering-pool.ts'
 import { BuildGitDiff, DiffFileName, ResolvePreviewOutputDirectory, WritePreviewArtifacts, type PreviewFileChange } from './sources/preview.ts'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
@@ -26,6 +27,7 @@ const Env = await Zod.object({
   SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
   GLOBALPING_API_TOKEN: Zod.string().min(1, 'GLOBALPING_API_TOKEN is required'),
   MAX_CANDIDATES: Zod.string().default(String(DefaultMaxCandidates)).transform(Value => Number(Value)),
+  ORDERING_WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultOrderingWorkerCount() : Number(Value)),
   WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
 }).strip()
   .superRefine((Value, Context) => {
@@ -36,6 +38,10 @@ const Env = await Zod.object({
 
     if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
       Context.addIssue({ code: 'custom', path: ['WORKER_COUNT'], message: 'WORKER_COUNT must be a positive integer' })
+    }
+
+    if (!Number.isInteger(Value.ORDERING_WORKER_COUNT) || Value.ORDERING_WORKER_COUNT <= 0) {
+      Context.addIssue({ code: 'custom', path: ['ORDERING_WORKER_COUNT'], message: 'ORDERING_WORKER_COUNT must be a positive integer' })
     }
 
     if (Value.DRY_RUN && !Value.PREVIEW_OUTPUT_DIRECTORY) {
@@ -82,8 +88,10 @@ const Candidates = await BuildDomainCandidates({
   Occurrences,
   State,
   FallbackAuthorTime: CheckedAt,
-  WorkerCount: Env.WORKER_COUNT
+  OrderingWorkerCount: Env.ORDERING_WORKER_COUNT,
+  OnOrderingWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
 })
+Core.info(`[dead-domain-pinger] Ordered domains from Git history with up to ${Env.ORDERING_WORKER_COUNT} workers`)
 const SelectedWork = SelectProbeWork(Candidates, State, Env.MAX_CANDIDATES)
 Core.info(`[dead-domain-pinger] Selected ${SelectedWork.length} probe jobs with ${Env.WORKER_COUNT} workers (limit ${GlobalpingConfig.Limit} per measurement)`)
 

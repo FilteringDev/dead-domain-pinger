@@ -1,161 +1,474 @@
-import { simpleGit } from 'simple-git'
-import type { SimpleGit } from 'simple-git'
+import * as ChildProcess from 'node:child_process'
 import type { DomainOccurrence } from './types.ts'
 import { GetRuleDomains, ParseRule } from './rule-domains.ts'
 
-const UncommittedCommit = '0'.repeat(40)
 const CommitSeparator = '\u0000'
 // A literal NUL cannot be passed as a process argument, so git has to produce the separator itself.
 const CommitSeparatorFormat = '%x00'
+const CommitCacheLimit = 128
+const StderrLimit = 8 * 1024
+const WarningDetailLimit = 512
 
 export type LineBlame = {
   Commit: string
   AuthorTime: number
 }
 
-async function RunGit<Result>(WorkingDirectory: string, Operation: (Git: SimpleGit) => Promise<Result>): Promise<Result | null> {
-  try {
-    return await Operation(simpleGit({ baseDir: WorkingDirectory }))
-  } catch {
-    return null
-  }
+export type GitHistoryFailure = {
+  Operation: string
+  Message: string
 }
 
-/** Domains referenced by raw filter list lines, ignoring anything that does not parse as a rule. */
-function GetDomainsOfLines(Lines: string[]): Set<string> {
-  const Domains = new Set<string>()
+type GitOutcome = {
+  Succeeded: boolean
+  Message: string
+}
 
-  for (const Line of Lines) {
-    const Rule = ParseRule(Line)
-    if (!Rule) {
-      continue
+type GitCompletion = {
+  Code: number | null
+  Signal: NodeJS.Signals | null
+  Error: Error | null
+}
+
+type ParsedCommitDiff = {
+  Commit: string
+  AuthorTime: number
+  IntroducedDomains: Set<string>
+}
+
+type FallbackOccurrence = {
+  Domain: string
+  AuthorTime: number
+}
+
+type CommitIntroductionCache = Map<string, Set<string>>
+
+export type SeparatedRecordResult = {
+  Completed: boolean
+  Pending: string
+}
+
+function AddFailure(Failures: GitHistoryFailure[], Operation: string, Outcome: GitOutcome): void {
+  if (Outcome.Succeeded || Failures.some(Failure => Failure.Operation === Operation)) {
+    return
+  }
+
+  Failures.push({ Operation, Message: Outcome.Message })
+}
+
+function CompletionOf(Child: ChildProcess.ChildProcess): Promise<GitCompletion> {
+  return new Promise(Resolve => {
+    let Settled = false
+
+    const Finish = (Completion: GitCompletion): void => {
+      if (!Settled) {
+        Settled = true
+        Resolve(Completion)
+      }
     }
 
-    for (const Domain of GetRuleDomains(Rule)) {
+    Child.once('error', ErrorValue => Finish({ Code: null, Signal: null, Error: ErrorValue }))
+    Child.once('close', (Code, Signal) => Finish({ Code, Signal, Error: null }))
+  })
+}
+
+function DescribeFailure(Completion: GitCompletion, Stderr: string): string {
+  const Detail = Stderr.trim().replace(/\s+/gu, ' ').slice(0, WarningDetailLimit)
+  if (Completion.Error) {
+    return Detail || Completion.Error.message
+  }
+
+  const Status = Completion.Signal ? `signal ${Completion.Signal}` : `exit code ${Completion.Code ?? 'unknown'}`
+  return Detail ? `${Status}: ${Detail}` : Status
+}
+
+/** Consumes complete records as chunks arrive and leaves only the final unfinished record. */
+export async function ConsumeSeparatedRecords(
+  Chunks: AsyncIterable<string>,
+  Separator: string,
+  HandleRecord: (Record: string) => boolean | Promise<boolean>
+): Promise<SeparatedRecordResult> {
+  if (!Separator) {
+    throw new Error('Record separator must not be empty')
+  }
+
+  let Pending = ''
+
+  for await (const Chunk of Chunks) {
+    Pending += String(Chunk)
+
+    for (;;) {
+      const SeparatorIndex = Pending.indexOf(Separator)
+      if (SeparatorIndex < 0) {
+        break
+      }
+
+      const Record = Pending.slice(0, SeparatorIndex)
+      Pending = Pending.slice(SeparatorIndex + Separator.length)
+      if (Record && !(await HandleRecord(Record))) {
+        return { Completed: false, Pending: '' }
+      }
+    }
+  }
+
+  return { Completed: true, Pending }
+}
+
+/** Streams separator-delimited Git output and never retains more than one unfinished record. */
+async function RunGitRecords(
+  WorkingDirectory: string,
+  GitArguments: string[],
+  Separator: string,
+  HandleRecord: (Record: string) => boolean | Promise<boolean>
+): Promise<GitOutcome> {
+  const Child = ChildProcess.spawn('git', GitArguments, {
+    cwd: WorkingDirectory,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const CompletionPromise = CompletionOf(Child)
+  let Stderr = ''
+  let StoppedEarly = false
+  let ReadError: Error | null = null
+  let Pending = ''
+
+  Child.stderr?.setEncoding('utf-8')
+  Child.stderr?.on('data', Chunk => {
+    if (Stderr.length < StderrLimit) {
+      Stderr += String(Chunk).slice(0, StderrLimit - Stderr.length)
+    }
+  })
+
+  Child.stdout?.setEncoding('utf-8')
+  try {
+    const Result = await ConsumeSeparatedRecords(
+      (Child.stdout ?? []) as AsyncIterable<string>,
+      Separator,
+      HandleRecord
+    )
+    StoppedEarly = !Result.Completed
+    Pending = Result.Pending
+    if (StoppedEarly) {
+      Child.kill()
+    }
+  } catch (ErrorValue) {
+    ReadError = ErrorValue instanceof Error ? ErrorValue : new Error(String(ErrorValue))
+    Child.kill()
+  }
+
+  const Completion = await CompletionPromise
+  if (StoppedEarly) {
+    return { Succeeded: true, Message: '' }
+  }
+  if (ReadError) {
+    return { Succeeded: false, Message: ReadError.message }
+  }
+  if (Completion.Code !== 0) {
+    return { Succeeded: false, Message: DescribeFailure(Completion, Stderr) }
+  }
+
+  if (Pending && !(await HandleRecord(Pending))) {
+    return { Succeeded: true, Message: '' }
+  }
+
+  return { Succeeded: true, Message: '' }
+}
+
+/** Adds only domains relevant to the current file, avoiding raw diff-line retention. */
+function AddDomainsOfLine(Line: string, RelevantDomains: Set<string>, Domains: Set<string>): void {
+  const Rule = ParseRule(Line)
+  if (!Rule) {
+    return
+  }
+
+  for (const Domain of GetRuleDomains(Rule)) {
+    if (RelevantDomains.has(Domain)) {
       Domains.add(Domain)
     }
   }
+}
 
-  return Domains
+function ParseCommitDiff(Block: string, RelevantDomains: Set<string>): ParsedCommitDiff | null {
+  const HeaderEnd = Block.indexOf('\n')
+  const Header = (HeaderEnd < 0 ? Block : Block.slice(0, HeaderEnd)).trim()
+  const HeaderMatch = /^([0-9a-f]+)\s+(\d+)$/u.exec(Header)
+  if (!HeaderMatch) {
+    return null
+  }
+
+  const AuthorTime = Number(HeaderMatch[2])
+  if (!Number.isFinite(AuthorTime)) {
+    return null
+  }
+
+  const BeforeDomains = new Set<string>()
+  const AfterDomains = new Set<string>()
+  let Start = HeaderEnd < 0 ? Block.length : HeaderEnd + 1
+
+  while (Start <= Block.length) {
+    const End = Block.indexOf('\n', Start)
+    const Line = Block.slice(Start, End < 0 ? Block.length : End)
+
+    if (Line.startsWith('+') && !Line.startsWith('+++')) {
+      AddDomainsOfLine(Line.slice(1), RelevantDomains, AfterDomains)
+    } else if (Line.startsWith('-') && !Line.startsWith('---')) {
+      AddDomainsOfLine(Line.slice(1), RelevantDomains, BeforeDomains)
+    } else if (Line.startsWith(' ')) {
+      AddDomainsOfLine(Line.slice(1), RelevantDomains, BeforeDomains)
+      AddDomainsOfLine(Line.slice(1), RelevantDomains, AfterDomains)
+    }
+
+    if (End < 0) {
+      break
+    }
+    Start = End + 1
+  }
+
+  return {
+    Commit: HeaderMatch[1],
+    AuthorTime,
+    IntroducedDomains: new Set([...AfterDomains].filter(Domain => !BeforeDomains.has(Domain)))
+  }
+}
+
+function FirstLineAtOrAfter(Lines: number[], Target: number): number {
+  let Lower = 0
+  let Upper = Lines.length
+
+  while (Lower < Upper) {
+    const Middle = Math.floor((Lower + Upper) / 2)
+    if (Lines[Middle] < Target) {
+      Lower = Middle + 1
+    } else {
+      Upper = Middle
+    }
+  }
+
+  return Lower
 }
 
 /**
- * Maps 1-based line numbers of a file to the commit that last touched them.
+ * Maps requested 1-based line numbers to the commit that last touched them.
  * Lines that are not committed yet and files without git history are left out.
  */
-export async function GetLineBlame(WorkingDirectory: string, FilePath: string): Promise<Map<number, LineBlame>> {
+export async function GetLineBlame(
+  WorkingDirectory: string,
+  FilePath: string,
+  RequestedLines?: Set<number>,
+  Failures: GitHistoryFailure[] = []
+): Promise<Map<number, LineBlame>> {
   const Blame = new Map<number, LineBlame>()
-  const BlameOutput = await RunGit(WorkingDirectory, Git => Git.raw(['blame', '--line-porcelain', '--', FilePath]))
-  if (BlameOutput === null) {
+  if (RequestedLines?.size === 0) {
     return Blame
   }
 
-  let CurrentLineNumber = 0
+  const SortedLines = RequestedLines ? [...RequestedLines].sort((Left, Right) => Left - Right) : null
+  const AuthorTimes = new Map<string, number>()
   let CurrentCommit = ''
+  let CurrentStart = 0
+  let CurrentLength = 0
+  let CurrentAuthorTime: number | null = null
 
-  for (const Line of BlameOutput.split('\n')) {
-    const HeaderMatch = /^([0-9a-f]{40})\s+\d+\s+(\d+)(?:\s+\d+)?$/.exec(Line)
-    if (HeaderMatch) {
-      CurrentCommit = HeaderMatch[1]
-      CurrentLineNumber = Number(HeaderMatch[2])
-      continue
-    }
-
-    if (CurrentLineNumber > 0 && CurrentCommit !== UncommittedCommit && Line.startsWith('author-time ')) {
-      const AuthorTime = Number(Line.slice('author-time '.length).trim())
-      if (Number.isFinite(AuthorTime)) {
-        Blame.set(CurrentLineNumber, { Commit: CurrentCommit, AuthorTime })
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['blame', '--incremental', '--', FilePath],
+    '\n',
+    Line => {
+      const HeaderMatch = /^([0-9a-f]+)\s+\d+\s+(\d+)\s+(\d+)$/u.exec(Line)
+      if (HeaderMatch) {
+        CurrentCommit = HeaderMatch[1]
+        CurrentStart = Number(HeaderMatch[2])
+        CurrentLength = Number(HeaderMatch[3])
+        CurrentAuthorTime = AuthorTimes.get(CurrentCommit) ?? null
+        return true
       }
-    }
-  }
 
-  return Blame
-}
-
-type CommitDiff = {
-  Commit: string
-  AuthorTime: number
-  BeforeLines: string[]
-  AfterLines: string[]
-}
-
-function ParseCommitDiffs(LogOutput: string): CommitDiff[] {
-  const Diffs: CommitDiff[] = []
-
-  for (const Block of LogOutput.split(CommitSeparator).slice(1)) {
-    const Lines = Block.split('\n')
-    const [Commit, RawAuthorTime] = Lines[0].trim().split(' ')
-    const AuthorTime = Number(RawAuthorTime)
-    if (!Number.isFinite(AuthorTime)) {
-      continue
-    }
-
-    const Diff: CommitDiff = { Commit, AuthorTime, BeforeLines: [], AfterLines: [] }
-
-    for (const Line of Lines.slice(1)) {
-      if (Line.startsWith('+') && !Line.startsWith('+++')) {
-        Diff.AfterLines.push(Line.slice(1))
-      } else if (Line.startsWith('-') && !Line.startsWith('---')) {
-        Diff.BeforeLines.push(Line.slice(1))
-      } else if (Line.startsWith(' ')) {
-        Diff.BeforeLines.push(Line.slice(1))
-        Diff.AfterLines.push(Line.slice(1))
+      if (Line.startsWith('author-time ')) {
+        const AuthorTime = Number(Line.slice('author-time '.length).trim())
+        if (Number.isFinite(AuthorTime)) {
+          CurrentAuthorTime = AuthorTime
+          AuthorTimes.set(CurrentCommit, AuthorTime)
+        }
+        return true
       }
+
+      if (!Line.startsWith('filename ') || !CurrentCommit || /^0+$/u.test(CurrentCommit) || CurrentAuthorTime === null) {
+        return true
+      }
+
+      const End = CurrentStart + CurrentLength
+      if (SortedLines) {
+        for (let Index = FirstLineAtOrAfter(SortedLines, CurrentStart); Index < SortedLines.length && SortedLines[Index] < End; Index += 1) {
+          Blame.set(SortedLines[Index], { Commit: CurrentCommit, AuthorTime: CurrentAuthorTime })
+        }
+      } else {
+        for (let LineNumber = CurrentStart; LineNumber < End; LineNumber += 1) {
+          Blame.set(LineNumber, { Commit: CurrentCommit, AuthorTime: CurrentAuthorTime })
+        }
+      }
+
+      return SortedLines ? Blame.size < SortedLines.length : true
     }
+  )
 
-    Diffs.push(Diff)
-  }
-
-  return Diffs
+  AddFailure(Failures, 'blame', Outcome)
+  return Outcome.Succeeded ? Blame : new Map()
 }
 
-/**
- * Domains a diff really brought in. Domains that only moved around within the same commit are
- * excluded, so adding one domain to an existing rule does not refresh its neighbours.
- */
-function GetIntroducedDomains(Diff: CommitDiff): Set<string> {
-  const BeforeDomains = GetDomainsOfLines(Diff.BeforeLines)
+/** Domains introduced by one commit, filtered to the supplied file-domain set when provided. */
+export async function GetCommitIntroducedDomains(
+  WorkingDirectory: string,
+  Commit: string,
+  FilePath: string,
+  RelevantDomains?: Set<string>,
+  Failures: GitHistoryFailure[] = []
+): Promise<Set<string>> {
+  const IntroducedDomains = new Set<string>()
+  const Domains = RelevantDomains ?? new Set<string>()
+  let SawDiff = false
 
-  return new Set([...GetDomainsOfLines(Diff.AfterLines)].filter(Domain => !BeforeDomains.has(Domain)))
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['show', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', Commit, '--', FilePath],
+    CommitSeparator,
+    Block => {
+      if (!Block.trim()) {
+        return true
+      }
+
+      if (!RelevantDomains) {
+        // The unfiltered exported path first discovers domains from the diff, then reparses it.
+        let Start = Block.indexOf('\n') + 1
+        while (Start > 0 && Start <= Block.length) {
+          const End = Block.indexOf('\n', Start)
+          const Line = Block.slice(Start, End < 0 ? Block.length : End)
+          if ((Line.startsWith('+') && !Line.startsWith('+++'))
+            || (Line.startsWith('-') && !Line.startsWith('---'))
+            || Line.startsWith(' ')) {
+            const Rule = ParseRule(Line.slice(1))
+            if (Rule) {
+              for (const Domain of GetRuleDomains(Rule)) {
+                Domains.add(Domain)
+              }
+            }
+          }
+          if (End < 0) {
+            break
+          }
+          Start = End + 1
+        }
+      }
+
+      const Diff = ParseCommitDiff(Block, Domains)
+      if (Diff) {
+        SawDiff = true
+        for (const Domain of Diff.IntroducedDomains) {
+          IntroducedDomains.add(Domain)
+        }
+      }
+      return true
+    }
+  )
+
+  AddFailure(Failures, 'commit diff', Outcome)
+  return Outcome.Succeeded && SawDiff ? IntroducedDomains : new Set()
 }
 
-export async function GetCommitIntroducedDomains(WorkingDirectory: string, Commit: string, FilePath: string): Promise<Set<string>> {
-  const ShowOutput = await RunGit(WorkingDirectory, Git => Git.show([
-    `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', Commit, '--', FilePath
-  ]))
-  const Diff = ShowOutput === null ? undefined : ParseCommitDiffs(ShowOutput)[0]
-
-  return Diff ? GetIntroducedDomains(Diff) : new Set()
-}
-
-/** History of a single line, newest first, back to the commit that created it. */
-async function GetLineHistory(WorkingDirectory: string, FilePath: string, LineNumber: number): Promise<CommitDiff[]> {
-  const LogOutput = await RunGit(WorkingDirectory, Git => Git.raw([
-    'log', `-L${LineNumber},${LineNumber}:${FilePath}`, `--format=${CommitSeparatorFormat}%H %at`, '--no-color'
-  ]))
-
-  return LogOutput === null ? [] : ParseCommitDiffs(LogOutput)
-}
-
-/** Newest commit that brought each domain into a file, over the whole history of that file. */
-async function GetFileIntroductionTimes(WorkingDirectory: string, FilePath: string): Promise<Map<string, number>> {
+async function GetLineIntroductionTimes(
+  WorkingDirectory: string,
+  FilePath: string,
+  LineNumber: number,
+  Domains: Set<string>,
+  IntroducedDomainsOf: (Commit: string) => Promise<Set<string>>,
+  Failures: GitHistoryFailure[]
+): Promise<Map<string, number>> {
   const IntroductionTimes = new Map<string, number>()
-  const LogOutput = await RunGit(WorkingDirectory, Git => Git.raw([
-    'log', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', '-p', '--', FilePath
-  ]))
-  if (LogOutput === null) {
-    return IntroductionTimes
-  }
+  const RemainingDomains = new Set(Domains)
 
-  for (const Diff of ParseCommitDiffs(LogOutput)) {
-    for (const Domain of GetIntroducedDomains(Diff)) {
-      if (!IntroductionTimes.has(Domain)) {
-        IntroductionTimes.set(Domain, Diff.AuthorTime)
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['log', `-L${LineNumber},${LineNumber}:${FilePath}`, `--format=${CommitSeparatorFormat}%H %at`, '--no-color'],
+    CommitSeparator,
+    async Block => {
+      const Diff = ParseCommitDiff(Block, RemainingDomains)
+      if (!Diff || Diff.IntroducedDomains.size === 0) {
+        return true
       }
+
+      const FileIntroductions = await IntroducedDomainsOf(Diff.Commit)
+      for (const Domain of Diff.IntroducedDomains) {
+        // A commit that only moved the domain into this line does not count as a modification.
+        if (FileIntroductions.has(Domain)) {
+          IntroductionTimes.set(Domain, Diff.AuthorTime)
+          RemainingDomains.delete(Domain)
+        }
+      }
+
+      return RemainingDomains.size > 0
     }
+  )
+
+  AddFailure(Failures, 'line history', Outcome)
+  return Outcome.Succeeded ? IntroductionTimes : new Map()
+}
+
+/** Newest commit that brought each requested domain into a file, over its whole history. */
+async function GetFileIntroductionTimes(
+  WorkingDirectory: string,
+  FilePath: string,
+  Domains: Set<string>,
+  Failures: GitHistoryFailure[]
+): Promise<Map<string, number>> {
+  const IntroductionTimes = new Map<string, number>()
+  const RemainingDomains = new Set(Domains)
+
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['log', `--format=${CommitSeparatorFormat}%H %at`, '--no-color', '-U0', '-p', '--', FilePath],
+    CommitSeparator,
+    Block => {
+      const Diff = ParseCommitDiff(Block, RemainingDomains)
+      if (!Diff) {
+        return true
+      }
+
+      for (const Domain of Diff.IntroducedDomains) {
+        IntroductionTimes.set(Domain, Diff.AuthorTime)
+        RemainingDomains.delete(Domain)
+      }
+
+      return RemainingDomains.size > 0
+    }
+  )
+
+  AddFailure(Failures, 'file history', Outcome)
+  return Outcome.Succeeded ? IntroductionTimes : new Map()
+}
+
+function SetNewestTime(ModifiedTimes: Map<string, number>, Domain: string, ModifiedAt: number): void {
+  ModifiedTimes.set(Domain, Math.max(ModifiedTimes.get(Domain) ?? ModifiedAt, ModifiedAt))
+}
+
+function ReadCachedIntroduction(Cache: CommitIntroductionCache, Commit: string): Set<string> | null {
+  const Cached = Cache.get(Commit)
+  if (!Cached) {
+    return null
   }
 
-  return IntroductionTimes
+  Cache.delete(Commit)
+  Cache.set(Commit, Cached)
+  return Cached
+}
+
+function WriteCachedIntroduction(Cache: CommitIntroductionCache, Commit: string, Domains: Set<string>): void {
+  Cache.set(Commit, Domains)
+  if (Cache.size <= CommitCacheLimit) {
+    return
+  }
+
+  const OldestCommit = Cache.keys().next().value
+  if (OldestCommit !== undefined) {
+    Cache.delete(OldestCommit)
+  }
 }
 
 /** Resolves the last time each domain of a single file was introduced or changed by a commit. */
@@ -163,50 +476,105 @@ export async function GetDomainModifiedTimes(
   WorkingDirectory: string,
   FilePath: string,
   Occurrences: DomainOccurrence[],
-  FallbackAuthorTime: number
+  FallbackAuthorTime: number,
+  Failures: GitHistoryFailure[] = []
 ): Promise<Map<string, number>> {
-  const Blame = await GetLineBlame(WorkingDirectory, FilePath)
-  const IntroducedDomainsByCommit = new Map<string, Set<string>>()
+  const DomainsByLine = new Map<number, Set<string>>()
+  const RelevantDomains = new Set<string>()
+  for (const Occurrence of Occurrences) {
+    RelevantDomains.add(Occurrence.Domain)
+    const LineDomains = DomainsByLine.get(Occurrence.LineNumber) ?? new Set<string>()
+    LineDomains.add(Occurrence.Domain)
+    DomainsByLine.set(Occurrence.LineNumber, LineDomains)
+  }
+
+  const Blame = await GetLineBlame(WorkingDirectory, FilePath, new Set(DomainsByLine.keys()), Failures)
+  const IntroducedDomainsByCommit: CommitIntroductionCache = new Map()
   const ModifiedTimes = new Map<string, number>()
-  let FileIntroductionTimes: Map<string, number> | null = null
+  const FallbackOccurrences: FallbackOccurrence[] = []
 
   const IntroducedDomainsOf = async (Commit: string): Promise<Set<string>> => {
-    let IntroducedDomains = IntroducedDomainsByCommit.get(Commit)
-    if (!IntroducedDomains) {
-      IntroducedDomains = await GetCommitIntroducedDomains(WorkingDirectory, Commit, FilePath)
-      IntroducedDomainsByCommit.set(Commit, IntroducedDomains)
+    const Cached = ReadCachedIntroduction(IntroducedDomainsByCommit, Commit)
+    if (Cached) {
+      return Cached
     }
 
+    const IntroducedDomains = await GetCommitIntroducedDomains(
+      WorkingDirectory,
+      Commit,
+      FilePath,
+      RelevantDomains,
+      Failures
+    )
+    WriteCachedIntroduction(IntroducedDomainsByCommit, Commit, IntroducedDomains)
     return IntroducedDomains
   }
 
-  const ResolveModifiedAt = async (Occurrence: DomainOccurrence, LineBlameEntry: LineBlame): Promise<number> => {
-    if ((await IntroducedDomainsOf(LineBlameEntry.Commit)).has(Occurrence.Domain)) {
-      return LineBlameEntry.AuthorTime
+  for (const [LineNumber, Domains] of DomainsByLine) {
+    const LineBlameEntry = Blame.get(LineNumber)
+    if (!LineBlameEntry) {
+      for (const Domain of Domains) {
+        SetNewestTime(ModifiedTimes, Domain, FallbackAuthorTime)
+      }
+      continue
     }
 
-    for (const Diff of await GetLineHistory(WorkingDirectory, FilePath, Occurrence.LineNumber)) {
-      // A commit that only moved the domain into this line does not count as a modification.
-      if (GetIntroducedDomains(Diff).has(Occurrence.Domain) && (await IntroducedDomainsOf(Diff.Commit)).has(Occurrence.Domain)) {
-        return Diff.AuthorTime
+    const RemainingDomains = new Set(Domains)
+    const BlameIntroductions = await IntroducedDomainsOf(LineBlameEntry.Commit)
+    for (const Domain of Domains) {
+      if (BlameIntroductions.has(Domain)) {
+        SetNewestTime(ModifiedTimes, Domain, LineBlameEntry.AuthorTime)
+        RemainingDomains.delete(Domain)
       }
     }
 
-    FileIntroductionTimes ??= await GetFileIntroductionTimes(WorkingDirectory, FilePath)
+    if (RemainingDomains.size > 0) {
+      const LineIntroductionTimes = await GetLineIntroductionTimes(
+        WorkingDirectory,
+        FilePath,
+        LineNumber,
+        RemainingDomains,
+        IntroducedDomainsOf,
+        Failures
+      )
 
-    return FileIntroductionTimes.get(Occurrence.Domain) ?? LineBlameEntry.AuthorTime
+      for (const Domain of RemainingDomains) {
+        const IntroductionTime = LineIntroductionTimes.get(Domain)
+        if (IntroductionTime === undefined) {
+          FallbackOccurrences.push({ Domain, AuthorTime: LineBlameEntry.AuthorTime })
+        } else {
+          SetNewestTime(ModifiedTimes, Domain, IntroductionTime)
+        }
+      }
+    }
   }
 
-  for (const Occurrence of Occurrences) {
-    const LineBlameEntry = Blame.get(Occurrence.LineNumber)
-    const ModifiedAt = LineBlameEntry ? await ResolveModifiedAt(Occurrence, LineBlameEntry) : FallbackAuthorTime
-
-    ModifiedTimes.set(Occurrence.Domain, Math.max(ModifiedTimes.get(Occurrence.Domain) ?? ModifiedAt, ModifiedAt))
+  if (FallbackOccurrences.length > 0) {
+    const FallbackDomains = new Set(FallbackOccurrences.map(Occurrence => Occurrence.Domain))
+    const FileIntroductionTimes = await GetFileIntroductionTimes(WorkingDirectory, FilePath, FallbackDomains, Failures)
+    for (const Occurrence of FallbackOccurrences) {
+      SetNewestTime(
+        ModifiedTimes,
+        Occurrence.Domain,
+        FileIntroductionTimes.get(Occurrence.Domain) ?? Occurrence.AuthorTime
+      )
+    }
   }
 
   return ModifiedTimes
 }
 
 export async function IsShallowRepository(WorkingDirectory: string): Promise<boolean> {
-  return (await RunGit(WorkingDirectory, Git => Git.revparse('--is-shallow-repository')))?.trim() === 'true'
+  let Result = ''
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['rev-parse', '--is-shallow-repository'],
+    '\n',
+    Line => {
+      Result = Line.trim()
+      return false
+    }
+  )
+
+  return Outcome.Succeeded && Result === 'true'
 }

@@ -2,19 +2,18 @@ import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
-import { simpleGit } from 'simple-git'
-import { GetDomainModifiedTimes } from '../sources/domain-history.ts'
+import { ConsumeSeparatedRecords, GetDomainModifiedTimes } from '../sources/domain-history.ts'
+import type { GitHistoryFailure } from '../sources/domain-history.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
+import { RunGit } from './git.ts'
 
 const FileName = 'filters.txt'
 
 async function CreateRepository(): Promise<string> {
   const Directory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-history-'))
-  const Git = simpleGit({ baseDir: Directory })
-
-  await Git.init(['--quiet', '--initial-branch=main'])
-  await Git.addConfig('user.email', 'test@example.com')
-  await Git.addConfig('user.name', 'Test')
+  await RunGit(Directory, ['init', '--quiet', '--initial-branch=main'])
+  await RunGit(Directory, ['config', 'user.email', 'test@example.com'])
+  await RunGit(Directory, ['config', 'user.name', 'Test'])
 
   return Directory
 }
@@ -23,12 +22,12 @@ async function Commit(Directory: string, Content: string, AuthorTime: number): P
   Fs.writeFileSync(Path.join(Directory, FileName), Content)
 
   const Date = `@${AuthorTime} +0000`
-  const Git = simpleGit({ baseDir: Directory }).env({
+  const Environment = {
     GIT_AUTHOR_DATE: Date,
     GIT_COMMITTER_DATE: Date
-  })
-  await Git.add('--all')
-  await Git.commit(`Update at ${AuthorTime}`, ['--quiet'])
+  }
+  await RunGit(Directory, ['add', '--all'], Environment)
+  await RunGit(Directory, ['commit', '--quiet', '-m', `Update at ${AuthorTime}`], Environment)
 }
 
 function Occurrence(Domain: string, LineNumber: number): DomainOccurrence {
@@ -107,4 +106,48 @@ test('Uncommitted files fall back to the given time', async () => {
   ], 9000)
 
   expect(ModifiedTimes.get('fresh.example.dev')).toBe(9000)
+})
+
+test('ConsumeSeparatedRecords yields records before the remaining history is available', async () => {
+  let ReleaseRemaining: (() => void) | undefined
+  const Remaining = new Promise<void>(Resolve => {
+    ReleaseRemaining = Resolve
+  })
+  let SawFirst: (() => void) | undefined
+  const First = new Promise<void>(Resolve => {
+    SawFirst = Resolve
+  })
+
+  async function* Chunks(): AsyncGenerator<string> {
+    yield '\u0000first\u0000'
+    await Remaining
+    yield 'sec'
+    yield 'ond'
+  }
+
+  const Records: string[] = []
+  const Consumption = ConsumeSeparatedRecords(Chunks(), '\u0000', Record => {
+    Records.push(Record)
+    SawFirst?.()
+    return true
+  })
+
+  await First
+  expect(Records).toEqual(['first'])
+  ReleaseRemaining?.()
+  await expect(Consumption).resolves.toEqual({ Completed: true, Pending: 'second' })
+})
+
+test('Git failures fall back to the given time and are deduplicated by operation', async () => {
+  const Failures: GitHistoryFailure[] = []
+  const ModifiedTimes = await GetDomainModifiedTimes('/path/that/does/not/exist', FileName, [
+    Occurrence('first.example.com', 1),
+    Occurrence('second.example.org', 2)
+  ], 9000, Failures)
+
+  expect(ModifiedTimes).toEqual(new Map([
+    ['first.example.com', 9000],
+    ['second.example.org', 9000]
+  ]))
+  expect(Failures.map(Failure => Failure.Operation)).toEqual(['blame'])
 })

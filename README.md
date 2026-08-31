@@ -86,11 +86,11 @@ git apply /path/to/dead-domain-preview/dead-domain.diff
 ```
 
 An empty diff means no filter changes were proposed. The local runner accepts `--filter-root`,
-`--file-extension`, `--max-candidates`, `--worker-count`, and an optional read-only
-`--state-path`; run it with `--help` for the complete interface. Without `--state-path`, it reads
-the default `dead-domain-state/dead-domain-state.sqlite` when present. `--always-refresh` ignores
-all prior state, including queued HTTP follow-ups, and cannot be combined with `--state-path`.
-It still respects `--max-candidates`.
+`--file-extension`, `--max-candidates`, `--worker-count`, `--ordering-worker-count`, and an
+optional read-only `--state-path`; run it with `--help` for the complete interface. Without
+`--state-path`, it reads the default `dead-domain-state/dead-domain-state.sqlite` when present.
+`--always-refresh` ignores all prior state, including queued HTTP follow-ups, and cannot be
+combined with `--state-path`. It still respects `--max-candidates`.
 
 In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
 artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
@@ -105,7 +105,8 @@ reports whether the preview diff is non-empty.
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
 | `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
-| `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for Git/domain ordering and selected-domain probes; when provided, it must be a positive integer |
+| `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for selected-domain probes; when provided, it must be a positive integer |
+| `ordering-worker-count` | `min(2, available CPUs)` | Number of Node.js worker threads used for Git/domain ordering; when provided, it must be a positive integer |
 | `dry-run` | `false` | Emit a Git diff and Markdown report without modifying the checkout, Git metadata, or persisted state |
 | `globalping-api-token` | - | Required Globalping access token |
 | `create-pr` | `false` | Create a pull request for changed filter files using GitHub CLI |
@@ -291,6 +292,11 @@ refreshes only that domain, and moving or reformatting a rule keeps the dates of
 already carried. This needs the full history, so check the repository out with `fetch-depth: 0`.
 The first run starts with an empty SQLite state when no artifact exists yet.
 
-Selected domains are probed by a bounded Node.js worker-thread pool. By default the pool size is
-`os.cpus().length`. Lower `worker-count` if the Globalping quota is tight or if parallel requests
-trigger rate limiting too quickly.
+Git history is searched as a stream with at most `ordering-worker-count` files in flight. The
+default is capped at two workers to keep peak memory bounded on GitHub-hosted runners. Existing
+`worker-count` settings apply only to probing; set `ordering-worker-count` explicitly to tune Git
+ordering throughput.
+
+Selected domains are probed by a separate bounded Node.js worker-thread pool. By default the pool
+size is `os.cpus().length`. Lower `worker-count` if the Globalping quota is tight or if parallel
+requests trigger rate limiting too quickly.

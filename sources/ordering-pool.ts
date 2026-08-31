@@ -1,6 +1,6 @@
+import * as Os from 'node:os'
 import * as Process from 'node:process'
 import { Piscina } from 'piscina'
-import { NormalizeWorkerCount } from './probe-pool.ts'
 import type { DomainOccurrence } from './types.ts'
 import type { OrderingWorkerResult, OrderingWorkerTask } from './ordering-worker.ts'
 
@@ -10,9 +10,18 @@ export type OrderingPoolOptions = {
   FallbackAuthorTime: number
   WorkerCount: number
   RunWorker?: OrderingWorkerRunner
+  OnWarning?: (Message: string) => void
 }
 
 export type OrderingWorkerRunner = (Task: OrderingWorkerTask) => Promise<OrderingWorkerResult>
+
+export function GetDefaultOrderingWorkerCount(): number {
+  return Math.max(1, Math.min(2, Os.availableParallelism()))
+}
+
+function NormalizeOrderingWorkerCount(WorkerCount: number): number {
+  return Number.isInteger(WorkerCount) && WorkerCount > 0 ? WorkerCount : GetDefaultOrderingWorkerCount()
+}
 
 function GetWorkerExecArgv(): string[] {
   const Arguments: string[] = []
@@ -47,7 +56,7 @@ function RunOrderingWorker(Pool: Piscina): OrderingWorkerRunner {
 }
 
 export async function GetDomainModifiedTimesWithWorkers(Options: OrderingPoolOptions): Promise<Map<string, Map<string, number>>> {
-  const Tasks = [...Options.OccurrencesByFile].map(([FilePath, Occurrences]) => ({
+  const Tasks: OrderingWorkerTask[] = [...Options.OccurrencesByFile].map(([FilePath, Occurrences]) => ({
     WorkingDirectory: Options.WorkingDirectory,
     FilePath,
     Occurrences,
@@ -57,13 +66,32 @@ export async function GetDomainModifiedTimesWithWorkers(Options: OrderingPoolOpt
     return new Map()
   }
 
-  const WorkerCount = Math.min(NormalizeWorkerCount(Options.WorkerCount), Tasks.length)
+  const WorkerCount = Math.min(NormalizeOrderingWorkerCount(Options.WorkerCount), Tasks.length)
   const Pool = Options.RunWorker ? null : CreateOrderingPool(WorkerCount)
   const RunWorker = Options.RunWorker ?? RunOrderingWorker(Pool!)
+  const Results = new Map<string, Map<string, number>>()
+  let NextIndex = 0
+
+  const RunNext = async (): Promise<void> => {
+    for (;;) {
+      const TaskIndex = NextIndex
+      NextIndex += 1
+      if (TaskIndex >= Tasks.length) {
+        return
+      }
+
+      const Result = await RunWorker(Tasks[TaskIndex])
+      Results.set(Result.FilePath, new Map(Result.ModifiedTimes))
+      if (Result.Failures.length > 0) {
+        const Details = Result.Failures.map(Failure => `${Failure.Operation}: ${Failure.Message}`).join('; ')
+        Options.OnWarning?.(`Git history ordering degraded for ${Result.FilePath} (${Details}); fallback timestamps were used`)
+      }
+    }
+  }
 
   try {
-    const Results = await Promise.all(Tasks.map(Task => RunWorker(Task)))
-    return new Map(Results.map(Result => [Result.FilePath, new Map(Result.ModifiedTimes)]))
+    await Promise.all(Array.from({ length: WorkerCount }, RunNext))
+    return Results
   } finally {
     await Pool?.destroy()
   }

@@ -27,7 +27,11 @@ inputs:
     required: false
     default: 'dead-domain-pinger-state'
   worker-count:
-    description: 'Number of Node.js worker threads used for Git/domain ordering and selected-domain probes (defaults to os.cpus().length)'
+    description: 'Number of Node.js worker threads used for selected-domain probes (defaults to os.cpus().length)'
+    required: false
+    default: ''
+  ordering-worker-count:
+    description: 'Number of Node.js worker threads used for Git/domain ordering (defaults to min(2, available CPUs))'
     required: false
     default: ''
   dry-run:
@@ -157,6 +161,7 @@ runs:
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         STATE_DIRECTORY: ${{ inputs.state-directory }}
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
+        ORDERING_WORKER_COUNT: ${{ inputs.ordering-worker-count }}
         WORKER_COUNT: ${{ inputs.worker-count }}
         DRY_RUN: ${{ inputs.dry-run }}
         ALWAYS_REFRESH: 'false'

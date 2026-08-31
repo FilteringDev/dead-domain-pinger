@@ -24,7 +24,8 @@ test('GetDomainModifiedTimesWithWorkers associates results with their file after
 
       return {
         FilePath: Task.FilePath,
-        ModifiedTimes: Task.Occurrences.map(Occurrence => [Occurrence.Domain, Task.FilePath === 'first.txt' ? 10 : 20])
+        ModifiedTimes: Task.Occurrences.map(Occurrence => [Occurrence.Domain, Task.FilePath === 'first.txt' ? 10 : 20]),
+        Failures: []
       }
     }
   })
@@ -45,4 +46,57 @@ test('GetDomainModifiedTimesWithWorkers skips worker creation when no files need
   })
 
   expect(Result).toEqual(new Map())
+})
+
+test('GetDomainModifiedTimesWithWorkers lazily runs only the configured number of file tasks', async () => {
+  const OccurrencesByFile = new Map<string, ReturnType<typeof Occurrence>[]>()
+  for (let Index = 0; Index < 5; Index += 1) {
+    const FilePath = `${Index}.txt`
+    OccurrencesByFile.set(FilePath, [Occurrence(`${Index}.example`, FilePath)])
+  }
+  let Active = 0
+  let MaximumActive = 0
+
+  await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile,
+    FallbackAuthorTime: 100,
+    WorkerCount: 2,
+    RunWorker: async Task => {
+      Active += 1
+      MaximumActive = Math.max(MaximumActive, Active)
+      await new Promise(Resolve => setTimeout(Resolve, 5))
+      Active -= 1
+      return {
+        FilePath: Task.FilePath,
+        ModifiedTimes: Task.Occurrences.map(DomainOccurrence => [DomainOccurrence.Domain, 10]),
+        Failures: []
+      }
+    }
+  })
+
+  expect(MaximumActive).toBe(2)
+})
+
+test('GetDomainModifiedTimesWithWorkers emits one warning for a degraded file', async () => {
+  const Warnings: string[] = []
+
+  await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile: new Map([['list.txt', [Occurrence('first.example', 'list.txt')]]]),
+    FallbackAuthorTime: 100,
+    WorkerCount: 1,
+    OnWarning: Warning => Warnings.push(Warning),
+    RunWorker: Task => Promise.resolve({
+      FilePath: Task.FilePath,
+      ModifiedTimes: [['first.example', 100]],
+      Failures: [
+        { Operation: 'blame', Message: 'exit code 1' },
+        { Operation: 'file history', Message: 'exit code 1' }
+      ]
+    })
+  })
+
+  expect(Warnings).toHaveLength(1)
+  expect(Warnings[0]).toContain('blame: exit code 1; file history: exit code 1')
 })
