@@ -2,6 +2,7 @@ import * as AGTree from '@adguard/agtree'
 import type { FileRewriteResult, RuleChange } from './types.ts'
 import {
   DomainModifierNames,
+  GetNetworkPatternDomain,
   IsCosmeticRule,
   IsNetworkRule,
   NormalizeDomain,
@@ -89,6 +90,11 @@ export function RewriteRule(RawRule: string, DeadDomains: Set<string>): RuleRewr
 
   if (!Rule || (!IsCosmeticRule(Rule) && !IsNetworkRule(Rule))) {
     return { Text: RawRule, RemovedDomains: [] }
+  }
+
+  const PatternDomain = GetNetworkPatternDomain(Rule)
+  if (PatternDomain && DeadDomains.has(PatternDomain)) {
+    return { Text: null, RemovedDomains: [PatternDomain] }
   }
 
   const NewRule = structuredClone(Rule)

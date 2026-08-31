@@ -30,10 +30,24 @@ test('RewriteRule shrinks a network rule that keeps at least one domain', () => 
   expect(Result.Text).toBe('||powerads.org^$domain=alive.com')
 })
 
-test('RewriteRule leaves the network pattern host untouched', () => {
+test('RewriteRule drops a network rule whose pattern host is dead', () => {
   const Result = RewriteRule('||example.com^', DeadDomains)
 
-  expect(Result.Text).toBe('||example.com^')
+  expect(Result.Text).toBe(null)
+  expect(Result.RemovedDomains).toEqual(['example.com'])
+})
+
+test('RewriteRule drops a path-specific network rule whose pattern host is dead', () => {
+  const Result = RewriteRule('||exmaple.com/mypath', new Set(['exmaple.com']))
+
+  expect(Result.Text).toBe(null)
+  expect(Result.RemovedDomains).toEqual(['exmaple.com'])
+})
+
+test('RewriteRule leaves a network pattern with an unknown suffix untouched', () => {
+  const Result = RewriteRule('||stats.tira.', new Set(['stats.tira']))
+
+  expect(Result.Text).toBe('||stats.tira.')
   expect(Result.RemovedDomains).toEqual([])
 })
 
@@ -59,7 +73,7 @@ test('RewriteFilterContent removes lines and preserves everything else', () => {
     '! Title: test',
     'example.com,live.com##.ads',
     'example.com,example.org##.banner',
-    '||tracker.example^$third-party',
+    '||tracker.example.net^$third-party',
     ''
   ].join('\n')
 
@@ -69,7 +83,7 @@ test('RewriteFilterContent removes lines and preserves everything else', () => {
   expect(Result.Content).toBe([
     '! Title: test',
     'live.com##.ads',
-    '||tracker.example^$third-party',
+    '||tracker.example.net^$third-party',
     ''
   ].join('\n'))
   expect(Result.ModifiedRules.length).toBe(1)
@@ -86,13 +100,14 @@ test('CollectDomainOccurrencesFromContent reports line numbers and skips non-dom
   const Content = [
     '! comment',
     'example.com##.ads',
-    '||ads.example^$domain=shop.example|~sub.shop.example',
+    '||ads.example.net^$domain=shop.example.org|~sub.shop.example.org',
     '/regexp/##.ads',
     '*##.ads'
   ].join('\n')
 
   expect(CollectDomainOccurrencesFromContent('test.txt', Content)).toEqual([
     { Domain: 'example.com', FilePath: 'test.txt', LineNumber: 2 },
-    { Domain: 'shop.example', FilePath: 'test.txt', LineNumber: 3 }
+    { Domain: 'ads.example.net', FilePath: 'test.txt', LineNumber: 3 },
+    { Domain: 'shop.example.org', FilePath: 'test.txt', LineNumber: 3 }
   ])
 })

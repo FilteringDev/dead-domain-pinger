@@ -1,6 +1,10 @@
 import * as AGTree from '@adguard/agtree'
+import { parse as ParseDomain } from 'tldts'
 
 export const DomainModifierNames = new Set(['domain', 'from'])
+
+const NetworkPatternDomainAnchor = '||'
+const NetworkPatternHostEnd = /[/:^|?#]/
 
 export const ParserOptions: AGTree.ParserOptions = {
   ...AGTree.defaultParserOptions,
@@ -48,7 +52,7 @@ export function ParseDomainList(RawDomainList: string, BaseOffset: number, Separ
 
 /**
  * Returns a comparable domain, or `null` when the entry is not a plain hostname
- * (wildcards, regular expressions, IP literals, `*` placeholders and so on).
+ * with a registrable ICANN suffix (wildcards, IP literals, unknown suffixes and so on).
  */
 export function NormalizeDomain(RawDomain: string): string | null {
   const Domain = RawDomain.trim().toLowerCase().replace(/\.$/, '')
@@ -57,11 +61,26 @@ export function NormalizeDomain(RawDomain: string): string | null {
     return null
   }
 
-  if (Domain.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(Domain)) {
+  const Parsed = ParseDomain(Domain)
+
+  if (Parsed.hostname !== Domain || Parsed.domain === null || Parsed.isIcann !== true || Parsed.isIp) {
     return null
   }
 
-  return AGTree.DomainUtils.isValidDomainOrHostname(Domain) ? Domain : null
+  return Domain
+}
+
+/** Plain hostname at the start of an AdGuard domain-anchored network pattern. */
+export function GetNetworkPatternDomain(Filter: AGTree.AnyRule): string | null {
+  if (!IsNetworkRule(Filter) || !Filter.pattern.value.startsWith(NetworkPatternDomainAnchor)) {
+    return null
+  }
+
+  const PatternBody = Filter.pattern.value.slice(NetworkPatternDomainAnchor.length)
+  const HostEnd = PatternBody.search(NetworkPatternHostEnd)
+  const RawHost = HostEnd === -1 ? PatternBody : PatternBody.slice(0, HostEnd)
+
+  return NormalizeDomain(RawHost)
 }
 
 /** Domain lists attached to a rule that make it apply to specific domains only. */
@@ -88,9 +107,14 @@ export function GetRuleDomainLists(Filter: AGTree.AnyRule): AGTree.DomainList[] 
   return DomainLists
 }
 
-/** Normalized, non-negated domains a rule is restricted to. */
+/** Normalized domains referenced by a rule's network pattern or non-negated domain lists. */
 export function GetRuleDomains(Filter: AGTree.AnyRule): string[] {
   const Domains: string[] = []
+  const PatternDomain = GetNetworkPatternDomain(Filter)
+
+  if (PatternDomain) {
+    Domains.push(PatternDomain)
+  }
 
   for (const DomainList of GetRuleDomainLists(Filter)) {
     for (const Domain of DomainList.children) {
@@ -105,7 +129,7 @@ export function GetRuleDomains(Filter: AGTree.AnyRule): string[] {
     }
   }
 
-  return Domains
+  return [...new Set(Domains)]
 }
 
 export function SerializeDomainList(Domains: AGTree.Domain[]): string {

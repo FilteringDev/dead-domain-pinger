@@ -44,24 +44,24 @@ test('BuildDomainCandidates keeps global Git ordering across parallel file worke
   await Git.addConfig('user.email', 'test@example.com')
   await Git.addConfig('user.name', 'Test')
 
-  Fs.writeFileSync(Path.join(WorkingDirectory, 'older.txt'), '||ads.example^$domain=older.example\n')
+  Fs.writeFileSync(Path.join(WorkingDirectory, 'older.txt'), '||ads.example.net^$domain=older.example.com\n')
   await Git.env({ GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }).add('--all')
   await Git.env({ GIT_AUTHOR_DATE: '@1000 +0000', GIT_COMMITTER_DATE: '@1000 +0000' }).commit('Add older', ['--quiet'])
 
-  Fs.writeFileSync(Path.join(WorkingDirectory, 'newer.txt'), '||ads.example^$domain=newer.example\n')
+  Fs.writeFileSync(Path.join(WorkingDirectory, 'newer.txt'), '||ads.example.net^$domain=newer.example.org\n')
   await Git.env({ GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }).add('--all')
   await Git.env({ GIT_AUTHOR_DATE: '@2000 +0000', GIT_COMMITTER_DATE: '@2000 +0000' }).commit('Add newer', ['--quiet'])
 
   const Candidates = await BuildDomainCandidates({
     WorkingDirectory,
     Occurrences: [
-      { Domain: 'older.example', FilePath: 'older.txt', LineNumber: 1 },
-      { Domain: 'newer.example', FilePath: 'newer.txt', LineNumber: 1 }
+      { Domain: 'older.example.com', FilePath: 'older.txt', LineNumber: 1 },
+      { Domain: 'newer.example.org', FilePath: 'newer.txt', LineNumber: 1 }
     ],
     State: CreateEmptyState(),
     FallbackAuthorTime: 9000,
     WorkerCount: 2
   })
 
-  expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['older.example', 'newer.example'])
+  expect(Candidates.map(Candidate => Candidate.Domain)).toEqual(['older.example.com', 'newer.example.org'])
 })

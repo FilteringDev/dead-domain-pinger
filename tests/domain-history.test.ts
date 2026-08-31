@@ -37,64 +37,74 @@ function Occurrence(Domain: string, LineNumber: number): DomainOccurrence {
 
 test('A domain added to an existing rule does not refresh its neighbours', async () => {
   const Directory = await CreateRepository()
-  await Commit(Directory, '||ads.example^$domain=first.example\n', 1000)
-  await Commit(Directory, '||ads.example^$domain=first.example|second.example\n', 2000)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com\n', 1000)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com|second.example.org\n', 2000)
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [
-    Occurrence('first.example', 1),
-    Occurrence('second.example', 1)
+    Occurrence('first.example.com', 1),
+    Occurrence('second.example.org', 1)
   ], 9000)
 
-  expect(ModifiedTimes.get('first.example')).toBe(1000)
-  expect(ModifiedTimes.get('second.example')).toBe(2000)
+  expect(ModifiedTimes.get('first.example.com')).toBe(1000)
+  expect(ModifiedTimes.get('second.example.org')).toBe(2000)
 })
 
 test('Rewriting a rule keeps the date of the domains it already had', async () => {
   const Directory = await CreateRepository()
-  await Commit(Directory, 'first.example##.ad\n', 1000)
-  await Commit(Directory, 'first.example##.ad-banner\n', 2000)
+  await Commit(Directory, 'first.example.com##.ad\n', 1000)
+  await Commit(Directory, 'first.example.com##.ad-banner\n', 2000)
 
-  const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [Occurrence('first.example', 1)], 9000)
+  const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [Occurrence('first.example.com', 1)], 9000)
 
-  expect(ModifiedTimes.get('first.example')).toBe(1000)
+  expect(ModifiedTimes.get('first.example.com')).toBe(1000)
+})
+
+test('Changing a network rule path keeps the pattern hostname date', async () => {
+  const Directory = await CreateRepository()
+  await Commit(Directory, '||cdn.example.com/old-path\n', 1000)
+  await Commit(Directory, '||cdn.example.com/new-path\n', 2000)
+
+  const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [Occurrence('cdn.example.com', 1)], 9000)
+
+  expect(ModifiedTimes.get('cdn.example.com')).toBe(1000)
 })
 
 test('Moving a domain to another line keeps its original date', async () => {
   const Directory = await CreateRepository()
-  await Commit(Directory, '||ads.example^$domain=first.example|second.example\n', 1000)
-  await Commit(Directory, '||ads.example^$domain=first.example\n||track.example^$domain=second.example\n', 2000)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com|second.example.org\n', 1000)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com\n||track.example.net^$domain=second.example.org\n', 2000)
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [
-    Occurrence('first.example', 1),
-    Occurrence('second.example', 2)
+    Occurrence('first.example.com', 1),
+    Occurrence('second.example.org', 2)
   ], 9000)
 
-  expect(ModifiedTimes.get('first.example')).toBe(1000)
-  expect(ModifiedTimes.get('second.example')).toBe(1000)
+  expect(ModifiedTimes.get('first.example.com')).toBe(1000)
+  expect(ModifiedTimes.get('second.example.org')).toBe(1000)
 })
 
 test('A domain re-added after a removal uses the newest date', async () => {
   const Directory = await CreateRepository()
-  await Commit(Directory, '||ads.example^$domain=first.example\n', 1000)
-  await Commit(Directory, '||ads.example^$domain=other.example\n', 2000)
-  await Commit(Directory, '||ads.example^$domain=other.example\n||track.example^$domain=first.example\n', 3000)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com\n', 1000)
+  await Commit(Directory, '||ads.example.net^$domain=other.example.net\n', 2000)
+  await Commit(Directory, '||ads.example.net^$domain=other.example.net\n||track.example.net^$domain=first.example.com\n', 3000)
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, FileName, [
-    Occurrence('other.example', 1),
-    Occurrence('first.example', 2)
+    Occurrence('other.example.net', 1),
+    Occurrence('first.example.com', 2)
   ], 9000)
 
-  expect(ModifiedTimes.get('first.example')).toBe(3000)
+  expect(ModifiedTimes.get('first.example.com')).toBe(3000)
 })
 
 test('Uncommitted files fall back to the given time', async () => {
   const Directory = await CreateRepository()
-  await Commit(Directory, '||ads.example^$domain=first.example\n', 1000)
-  Fs.writeFileSync(Path.join(Directory, 'extra.txt'), '||ads.example^$domain=fresh.example\n')
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com\n', 1000)
+  Fs.writeFileSync(Path.join(Directory, 'extra.txt'), '||ads.example.net^$domain=fresh.example.dev\n')
 
   const ModifiedTimes = await GetDomainModifiedTimes(Directory, 'extra.txt', [
-    { Domain: 'fresh.example', FilePath: 'extra.txt', LineNumber: 1 }
+    { Domain: 'fresh.example.dev', FilePath: 'extra.txt', LineNumber: 1 }
   ], 9000)
 
-  expect(ModifiedTimes.get('fresh.example')).toBe(9000)
+  expect(ModifiedTimes.get('fresh.example.dev')).toBe(9000)
 })

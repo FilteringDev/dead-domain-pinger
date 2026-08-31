@@ -9,6 +9,16 @@ include `forsale.godaddy.com` and take precedence even inside the same registrab
 same-domain redirects are only detected and reported; those domains are kept. Ambiguous probe
 results never delete a rule.
 
+Only plain hostnames with a registrable ICANN suffix are eligible for probing. The action collects
+them from cosmetic-rule domain prefixes, `$domain` and `$from` modifiers, and network patterns
+that begin with the AdGuard domain anchor (`||`). For example, `||example.com/path` contributes
+`example.com`; a trailing DNS dot is normalized away. If that pattern hostname is judged dead,
+the complete network rule is removed.
+
+Unknown or reserved suffixes such as `||stats.tira.` and `example.test`, wildcard and IP hosts,
+bare public suffixes, full-URL patterns, regular expressions, and unanchored network patterns are
+left unchanged and do not enter the probe queue.
+
 ## Usage
 
 ```yaml
