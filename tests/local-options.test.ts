@@ -16,10 +16,12 @@ function CreatePaths(): { RootDirectory: string, WorkingDirectory: string, Outpu
 
 test('ParseLocalOptions accepts the pnpm separator and provides local defaults', () => {
   const Paths = CreatePaths()
+  const StatePath = Path.join(Paths.RootDirectory, 'state.sqlite')
   const Options = ParseLocalOptions([
     '--',
     '--workspace', Paths.WorkingDirectory,
-    '--output', Paths.OutputDirectory
+    '--output', Paths.OutputDirectory,
+    '--state-path', StatePath
   ], Paths.RootDirectory)
 
   expect(Options).toMatchObject({
@@ -31,12 +33,11 @@ test('ParseLocalOptions accepts the pnpm separator and provides local defaults',
     MaxCandidates: '50',
     WorkerCount: '',
     OrderingWorkerCount: '',
-    StatePath: null,
-    AlwaysRefresh: false
+    StatePath
   })
 })
 
-test('ParseLocalOptions handles tuning flags and validates refresh state', () => {
+test('ParseLocalOptions handles tuning flags', () => {
   const Paths = CreatePaths()
   const StatePath = Path.join(Paths.RootDirectory, 'state.sqlite')
   const Options = ParseLocalOptions([
@@ -59,12 +60,6 @@ test('ParseLocalOptions handles tuning flags and validates refresh state', () =>
     StatePath
   })
 
-  expect(() => ParseLocalOptions([
-    '--workspace', Paths.WorkingDirectory,
-    '--output', Paths.OutputDirectory,
-    '--state-path', StatePath,
-    '--always-refresh'
-  ], Paths.RootDirectory)).toThrow('cannot be combined')
 })
 
 test('ParseLocalOptions rejects missing paths, invalid counts and checkout-contained output', () => {
@@ -73,21 +68,28 @@ test('ParseLocalOptions rejects missing paths, invalid counts and checkout-conta
   expect(() => ParseLocalOptions([], Paths.RootDirectory)).toThrow('--workspace is required')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
+    '--output', Paths.OutputDirectory
+  ], Paths.RootDirectory)).toThrow('--state-path is required')
+  expect(() => ParseLocalOptions([
+    '--workspace', Paths.WorkingDirectory,
     '--output', Paths.OutputDirectory,
+    '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
     '--max-candidates', '0'
   ], Paths.RootDirectory)).toThrow('--max-candidates must be a positive integer')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
     '--output', Paths.OutputDirectory,
+    '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
     '--ordering-worker-count', '0'
   ], Paths.RootDirectory)).toThrow('--ordering-worker-count must be a positive integer')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
-    '--output', Path.join(Paths.WorkingDirectory, 'preview')
+    '--output', Path.join(Paths.WorkingDirectory, 'preview'),
+    '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite')
   ], Paths.RootDirectory)).toThrow('outside the target workspace')
 })
 
-test('ApplyLocalEnvironment forces preview mode and clears state for always-refresh', () => {
+test('ApplyLocalEnvironment forces preview mode and configures the state cache', () => {
   const Paths = CreatePaths()
   const PreviousEnvironment = { ...Process.env }
 
@@ -96,15 +98,15 @@ test('ApplyLocalEnvironment forces preview mode and clears state for always-refr
     const Options = ParseLocalOptions([
       '--workspace', Paths.WorkingDirectory,
       '--output', Paths.OutputDirectory,
-      '--always-refresh'
+      '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite')
     ], Paths.RootDirectory)
 
     ApplyLocalEnvironment(Options)
 
     expect(Process.env.DRY_RUN).toBe('true')
-    expect(Process.env.ALWAYS_REFRESH).toBe('true')
+    expect(Process.env.ALWAYS_REFRESH).toBe('false')
     expect(Process.env.LOCAL_PREVIEW).toBe('true')
-    expect(Process.env.SQLITE_STATE_PATH).toBeUndefined()
+    expect(Process.env.SQLITE_STATE_PATH).toBe(Path.join(Paths.RootDirectory, 'state.sqlite'))
     expect(Process.env.GIT_OPTIONAL_LOCKS).toBe('0')
     expect(Process.env.ORDERING_WORKER_COUNT).toBe('')
   } finally {

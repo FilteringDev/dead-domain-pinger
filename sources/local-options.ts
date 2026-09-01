@@ -14,8 +14,7 @@ export type LocalOptions = {
   MaxCandidates: string
   WorkerCount: string
   OrderingWorkerCount: string
-  StatePath: string | null
-  AlwaysRefresh: boolean
+  StatePath: string
 }
 
 function RequireOption(Value: string | undefined, Name: string): string {
@@ -50,8 +49,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       'max-candidates': { type: 'string' },
       'worker-count': { type: 'string' },
       'ordering-worker-count': { type: 'string' },
-      'state-path': { type: 'string' },
-      'always-refresh': { type: 'boolean', default: false }
+      'state-path': { type: 'string' }
     },
     allowPositionals: false,
     strict: true
@@ -67,8 +65,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       MaxCandidates: String(DefaultMaxCandidates),
       WorkerCount: '',
       OrderingWorkerCount: '',
-      StatePath: null,
-      AlwaysRefresh: false
+      StatePath: ''
     }
   }
 
@@ -79,11 +76,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     throw new Error(`Workspace directory does not exist: ${Workspace}`)
   }
 
-  const StatePath = Parsed.values['state-path'] ? Path.resolve(CurrentDirectory, Parsed.values['state-path']) : null
-  const AlwaysRefresh = Parsed.values['always-refresh'] ?? false
-  if (AlwaysRefresh && StatePath) {
-    throw new Error('--always-refresh cannot be combined with --state-path')
-  }
+  const StatePath = Path.resolve(CurrentDirectory, RequireOption(Parsed.values['state-path'], '--state-path'))
 
   return {
     Help: false,
@@ -98,8 +91,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     OrderingWorkerCount: Parsed.values['ordering-worker-count']
       ? ParsePositiveInteger(Parsed.values['ordering-worker-count'], '--ordering-worker-count', '')
       : '',
-    StatePath,
-    AlwaysRefresh
+    StatePath
   }
 }
 
@@ -114,13 +106,9 @@ export function ApplyLocalEnvironment(Options: LocalOptions): void {
   Process.env.ORDERING_WORKER_COUNT = Options.OrderingWorkerCount
   Process.env.STATE_DIRECTORY = 'dead-domain-state'
   Process.env.DRY_RUN = 'true'
-  Process.env.ALWAYS_REFRESH = String(Options.AlwaysRefresh)
+  Process.env.ALWAYS_REFRESH = 'false'
   Process.env.LOCAL_PREVIEW = 'true'
   Process.env.GIT_OPTIONAL_LOCKS = '0'
 
-  if (Options.StatePath) {
-    Process.env.SQLITE_STATE_PATH = Options.StatePath
-  } else {
-    delete Process.env.SQLITE_STATE_PATH
-  }
+  Process.env.SQLITE_STATE_PATH = Options.StatePath
 }

@@ -5,7 +5,7 @@ import { DiffFileName } from './sources/preview.ts'
 import { ReportFileName } from './sources/report.ts'
 
 const HelpText = String.raw`Usage:
-  GLOBALPING_API_TOKEN=... pnpm run local -- --workspace PATH --output PATH [options]
+  GLOBALPING_API_TOKEN=... pnpm run local -- --workspace PATH --output PATH --state-path PATH [options]
 
 Options:
   --workspace PATH         Target filter-list checkout (required)
@@ -16,8 +16,7 @@ Options:
   --worker-count COUNT     Probe worker-thread count (default: os.cpus().length)
   --ordering-worker-count COUNT
                            Per-line Git history workers (default: os.availableParallelism())
-  --state-path PATH        Optional read-only SQLite state snapshot
-  --always-refresh         Ignore all prior state, including queued follow-ups
+  --state-path PATH        Read-only SQLite state snapshot (required)
   -h, --help               Show this help
 `
 

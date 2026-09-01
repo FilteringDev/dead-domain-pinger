@@ -72,7 +72,8 @@ Git metadata, or SQLite state:
 pnpm install --no-lockfile
 GLOBALPING_API_TOKEN=... pnpm run local -- \
   --workspace /path/to/filter-repository \
-  --output /path/outside/filter-repository/dead-domain-preview
+  --output /path/outside/filter-repository/dead-domain-preview \
+  --state-path /path/to/dead-domain-state.sqlite
 ```
 
 The output directory must be outside the target checkout. A successful run writes exactly
@@ -85,12 +86,11 @@ git apply --check /path/to/dead-domain-preview/dead-domain.diff
 git apply /path/to/dead-domain-preview/dead-domain.diff
 ```
 
-An empty diff means no filter changes were proposed. The local runner accepts `--filter-root`,
-`--file-extension`, `--max-candidates`, `--worker-count`, `--ordering-worker-count`, and an
-optional read-only `--state-path`; run it with `--help` for the complete interface. Without
-`--state-path`, it reads the default `dead-domain-state/dead-domain-state.sqlite` when present.
-`--always-refresh` ignores all prior state, including queued HTTP follow-ups, and cannot be
-combined with `--state-path`. It still respects `--max-candidates`.
+An empty diff means no filter changes were proposed. The local runner requires a read-only
+SQLite snapshot through `--state-path`, so domain ages and queued HTTP follow-ups use the same
+persisted state as the workflow. It also accepts `--filter-root`, `--file-extension`,
+`--max-candidates`, `--worker-count`, and `--ordering-worker-count`; run it with `--help` for
+the complete interface.
 
 In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
 artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
