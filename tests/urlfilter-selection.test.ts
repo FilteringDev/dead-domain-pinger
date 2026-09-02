@@ -33,7 +33,7 @@ test('URL Filter refills Globalping work from the next oldest candidate window',
     ['newer.example']
   ])
   expect(Result.WorkItems.map(Work => Work.SourceDomain)).toEqual(['older.example', 'newer.example'])
-  expect(Result).toMatchObject({ ConsideredCount: 3, UrlFilterSelectedCount: 2, FallbackCount: 0 })
+  expect(Result).toMatchObject({ ConsideredCount: 3, ObscuraCheckedCount: 0, ObscuraParkingCount: 0, UrlFilterSelectedCount: 2, FallbackCount: 0 })
 })
 
 test('URL Filter retains pending HTTP work order while preprocessing it', async () => {
@@ -66,6 +66,34 @@ test('URL Filter failure falls back to Globalping without exceeding its quota', 
   })
 
   expect(Result.WorkItems.map(Work => Work.SourceDomain)).toEqual(['oldest.example', 'older.example'])
-  expect(Result).toMatchObject({ ConsideredCount: 3, UrlFilterSelectedCount: 0, FallbackCount: 3 })
+  expect(Result).toMatchObject({ ConsideredCount: 3, ObscuraCheckedCount: 0, ObscuraParkingCount: 0, UrlFilterSelectedCount: 0, FallbackCount: 3 })
   expect(Warnings).toEqual(['URL Filter batch failed; using Globalping fallback for 3 jobs: service unavailable'])
+})
+
+test('Obscura parking results bypass URL Filter and Globalping within the shared quota', async () => {
+  const Result = await SelectUrlFilteredProbeWork({
+    Candidates: ['oldest.example', 'older.example'].map(Candidate),
+    State: CreateEmptyState(),
+    MaxCandidates: 2,
+    PrefetchMultiplier: 100,
+    Obscura: { BinaryPath: '/tmp/obscura', Concurrency: 10, TimeoutSeconds: 15 },
+    VerifyParkedDomains: ({ WorkItems }) => Promise.resolve(WorkItems[0] ? [{
+      Domain: WorkItems[0].SourceDomain,
+      Target: WorkItems[0].Target,
+      Protocol: WorkItems[0].Protocol,
+      Verdict: 'Dead',
+      Reason: 'parked',
+      Warnings: [],
+      SameDomainRedirects: [],
+      ModifiedAtOverride: null,
+      NextProbe: null,
+      Judgements: { domainList: { Verdict: 'Dead', Reason: 'parked', Stage: 'Http', RuleId: 'obscura-parking-redirect' } },
+      Provisional: false
+    }] : []),
+    FindUnusedDomains: ({ Domains }) => Promise.resolve(Domains)
+  })
+
+  expect(Result.DirectResults.map(Result => Result.Domain)).toEqual(['oldest.example'])
+  expect(Result.WorkItems.map(Work => Work.SourceDomain)).toEqual(['older.example'])
+  expect(Result).toMatchObject({ ObscuraCheckedCount: 2, ObscuraParkingCount: 1, ConsideredCount: 1 })
 })

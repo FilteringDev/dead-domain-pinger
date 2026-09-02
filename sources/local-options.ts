@@ -14,6 +14,9 @@ export type LocalOptions = {
   FileExtension: string
   MaxCandidates: string
   UrlFilterPrefetchMultiplier: string
+  ObscuraBin: string
+  ObscuraConcurrency: string
+  ObscuraTimeoutSeconds: string
   WorkerCount: string
   OrderingWorkerCount: string
   StatePath: string
@@ -51,6 +54,9 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       'file-extension': { type: 'string', default: '.txt' },
       'max-candidates': { type: 'string' },
       'urlfilter-prefetch-multiplier': { type: 'string' },
+      'obscura-bin': { type: 'string', default: '' },
+      'obscura-concurrency': { type: 'string' },
+      'obscura-timeout-seconds': { type: 'string' },
       'worker-count': { type: 'string' },
       'ordering-worker-count': { type: 'string' },
       'state-path': { type: 'string' }
@@ -69,6 +75,9 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       FileExtension: '.txt',
       MaxCandidates: String(DefaultMaxCandidates),
       UrlFilterPrefetchMultiplier: '100',
+      ObscuraBin: '',
+      ObscuraConcurrency: '10',
+      ObscuraTimeoutSeconds: '30',
       WorkerCount: '',
       OrderingWorkerCount: '',
       StatePath: ''
@@ -93,6 +102,9 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     FileExtension: RequireOption(Parsed.values['file-extension'], '--file-extension'),
     MaxCandidates: ParsePositiveInteger(Parsed.values['max-candidates'], '--max-candidates', String(DefaultMaxCandidates)),
     UrlFilterPrefetchMultiplier: ParsePositiveInteger(Parsed.values['urlfilter-prefetch-multiplier'], '--urlfilter-prefetch-multiplier', '100'),
+    ObscuraBin: Parsed.values['obscura-bin'] ?? '',
+    ObscuraConcurrency: ParsePositiveInteger(Parsed.values['obscura-concurrency'], '--obscura-concurrency', '10'),
+    ObscuraTimeoutSeconds: ParsePositiveInteger(Parsed.values['obscura-timeout-seconds'], '--obscura-timeout-seconds', '30'),
     WorkerCount: Parsed.values['worker-count']
       ? ParsePositiveInteger(Parsed.values['worker-count'], '--worker-count', '')
       : '',
@@ -112,6 +124,9 @@ export function ApplyLocalEnvironment(Options: LocalOptions): void {
   Process.env.FILE_EXTENSION = Options.FileExtension
   Process.env.MAX_CANDIDATES = Options.MaxCandidates
   Process.env.URLFILTER_PREFETCH_MULTIPLIER = Options.UrlFilterPrefetchMultiplier
+  Process.env.OBSCURA_BIN = Options.ObscuraBin
+  Process.env.OBSCURA_CONCURRENCY = Options.ObscuraConcurrency
+  Process.env.OBSCURA_TIMEOUT_SECONDS = Options.ObscuraTimeoutSeconds
   Process.env.WORKER_COUNT = Options.WorkerCount
   Process.env.ORDERING_WORKER_COUNT = Options.OrderingWorkerCount
   Process.env.STATE_DIRECTORY = 'dead-domain-state'

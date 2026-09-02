@@ -23,6 +23,14 @@ inputs:
     description: 'Number of Git-history-ordered candidates to prefilter with URL Filter per intended Globalping job'
     required: false
     default: '100'
+  obscura-concurrency:
+    description: 'Maximum parallel Obscura stealth browser workers used for parking-redirect verification'
+    required: false
+    default: '10'
+  obscura-timeout-seconds:
+    description: 'Per-navigation Obscura stealth timeout in seconds'
+    required: false
+    default: '30'
   globalping-api-token:
     description: 'Required Globalping access token, e.g. secrets.GLOBALPING_API_TOKEN'
     required: true
@@ -119,6 +127,27 @@ runs:
       run: mkdir -p '${{ runner.temp }}/dead-domain-pinger-state'
       shell: bash
 
+    - name: Install Obscura stealth browser
+      run: |
+        set -euo pipefail
+
+        [[ "$(uname -s)" == 'Linux' && "$(uname -m)" == 'x86_64' ]] || {
+          echo 'Obscura stealth verification currently requires a Linux x86_64 runner' >&2
+          exit 1
+        }
+
+        ObscuraDirectory="$(mktemp -d "${RUNNER_TEMP}/dead-domain-pinger-obscura-XXXXXX")"
+        curl --fail --location --retry 3 --output "${ObscuraDirectory}/obscura.tar.gz" \
+          'https://github.com/h4ckf0r0day/obscura/releases/latest/download/obscura-x86_64-linux-stealth.tar.gz'
+        tar --extract --gzip --file "${ObscuraDirectory}/obscura.tar.gz" --directory "${ObscuraDirectory}"
+        chmod +x "${ObscuraDirectory}/obscura" "${ObscuraDirectory}/obscura-worker"
+        [[ -x "${ObscuraDirectory}/obscura" && -x "${ObscuraDirectory}/obscura-worker" ]] || {
+          echo 'Obscura release archive did not contain required executables' >&2
+          exit 1
+        }
+        echo "OBSCURA_BIN=${ObscuraDirectory}/obscura" >> "${GITHUB_ENV}"
+      shell: bash
+
     - name: Download SQLite state artifact
       uses: actions/download-artifact@v7
       continue-on-error: true
@@ -168,6 +197,8 @@ runs:
         FILE_EXTENSION: ${{ inputs.file-extension }}
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
         URLFILTER_PREFETCH_MULTIPLIER: ${{ inputs.urlfilter-prefetch-multiplier }}
+        OBSCURA_CONCURRENCY: ${{ inputs.obscura-concurrency }}
+        OBSCURA_TIMEOUT_SECONDS: ${{ inputs.obscura-timeout-seconds }}
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         STATE_DIRECTORY: ${{ inputs.state-directory }}
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite

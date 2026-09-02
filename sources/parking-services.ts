@@ -10,7 +10,10 @@ function NormalizeParkingServiceHost(Host: string): string {
 
 /** Whether a hostname is a known parking-service redirect target. */
 export function IsParkingServiceHost(Host: string): boolean {
-  return ParkingServiceHosts.has(NormalizeParkingServiceHost(Host))
+  const NormalizedHost = NormalizeParkingServiceHost(Host)
+  return [...ParkingServiceHosts].some(ParkingHost => {
+    return NormalizedHost === ParkingHost || NormalizedHost.endsWith('.' + ParkingHost)
+  })
 }
 
 /** Conservative provider-owned fingerprints found in Globalping's HTTP response body. */

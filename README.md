@@ -10,6 +10,13 @@ domain was not used in AdGuard DNS during the last 24 hours are sent to Globalpi
 only a high-volume candidate selector: Globalping remains the sole authority for deletion. A failed
 URL Filter batch falls back to Globalping, so its availability cannot block a cleanup run.
 
+Every candidate in each URL Filter prefetch window is also checked by
+[Obscura](https://github.com/h4ckf0r0day/obscura) in stealth mode. Obscura starts with HTTPS and
+uses HTTP only when the HTTPS navigation fails. If either navigation's final FQDN is a known parking
+service or its subdomain, the action records a direct `obscura-parking-redirect` dead verdict and
+removes the matching rule without waiting for URL Filter or Globalping. Failed, timed-out, and
+non-parking Obscura checks are inconclusive and retain the existing URL Filter and Globalping path.
+
 By default, a domain is judged dead when DNS resolution fails, when TLS certificate validation fails, or when
 it redirects to a known parking service or a different registrable domain. Known parking targets
 include `forsale.godaddy.com` and take precedence even inside the same registrable domain. Other
@@ -42,6 +49,8 @@ left unchanged and do not enter the probe queue.
       filterslists/privacy
     max-candidates: '50'
     urlfilter-prefetch-multiplier: '100'
+    obscura-concurrency: '10'
+    obscura-timeout-seconds: '30'
     state-directory: dead-domain-state
     state-artifact-name: dead-domain-pinger-state
     dry-run: 'false'
@@ -183,7 +192,8 @@ An empty diff means no filter changes were proposed. The local runner requires a
 SQLite snapshot through `--state-path`, so domain ages and queued HTTP follow-ups use the same
 persisted state as the workflow. It also accepts `--filter-root`, `--scan-directories`,
 `--file-extension`, `--max-candidates`, `--urlfilter-prefetch-multiplier`, `--worker-count`, and
-`--ordering-worker-count`; run it with `--help` for the complete interface.
+`--ordering-worker-count`. Pass `--obscura-bin` to enable local Obscura verification, with optional
+`--obscura-concurrency` and `--obscura-timeout-seconds`; run it with `--help` for the complete interface.
 
 In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
 artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
@@ -198,6 +208,8 @@ reports whether the preview diff is non-empty.
 | `file-extension` | `.txt` | File extension used by filter list files |
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
 | `urlfilter-prefetch-multiplier` | `100` | Number of pending-first, Git-history-ordered candidates URL Filter considers per intended Globalping job. If fewer unused candidates are found, later candidates are considered until the Globalping job limit is reached. |
+| `obscura-concurrency` | `10` | Maximum parallel Obscura stealth browser workers used to verify parking redirects before URL Filter and Globalping selection. |
+| `obscura-timeout-seconds` | `30` | Per-navigation Obscura stealth timeout in seconds. |
 | `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for selected-domain probes; when provided, it must be a positive integer |
@@ -215,6 +227,10 @@ reports whether the preview diff is non-empty.
 discovered under `filter-root`. State pruning still considers domains found in all discovered filter
 files, so a verdict, pending retry, or Git-order cache entry remains available while that domain
 also appears outside the configured directories.
+
+The action downloads Obscura's `latest` Linux x86_64 stealth archive for each workflow run. This
+requires a Linux x86_64 runner and intentionally follows upstream releases without a pinned version
+or checksum; it trades reproducibility and supply-chain verification for automatic updates.
 
 ## Globalping configuration
 

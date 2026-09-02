@@ -49,3 +49,38 @@ test('report includes per-origin rule ids and removal triggers', () => {
   expect(Report).toContain('triggered by `example.com` [domainList]')
   expect(Report).toContain('`example.com` [networkPattern] — Alive [keep-pattern]')
 })
+
+test('report identifies direct Obscura parking verdicts', () => {
+  const Report = BuildReportMarkdown({
+    DryRun: true,
+    SelectedCount: 1,
+    RateLimited: false,
+    ChangedFiles: [],
+    ModifiedRules: [],
+    RemovedRules: [],
+    RunUrl: null,
+    ProbeResults: [{
+      Domain: 'parked.example',
+      Target: 'parked.example',
+      Protocol: 'HTTPS',
+      Verdict: 'Dead',
+      Reason: 'Obscura stealth verification redirected to a parking service (forsale.godaddy.com)',
+      Warnings: ['removed because Obscura stealth verification redirected to a known parking service (forsale.godaddy.com)'],
+      SameDomainRedirects: [],
+      ModifiedAtOverride: null,
+      NextProbe: null,
+      Provisional: false,
+      Judgements: {
+        networkPattern: {
+          Verdict: 'Dead',
+          Reason: 'Obscura stealth verification redirected to a parking service (forsale.godaddy.com)',
+          Stage: 'Http',
+          RuleId: 'obscura-parking-redirect'
+        }
+      }
+    }]
+  })
+
+  expect(Report).toContain('`parked.example` [networkPattern] [obscura-parking-redirect]')
+  expect(Report).toContain('Obscura stealth verification')
+})

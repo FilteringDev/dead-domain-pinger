@@ -31,6 +31,9 @@ const Env = await Zod.object({
   GLOBALPING_API_TOKEN: Zod.string().min(1, 'GLOBALPING_API_TOKEN is required'),
   MAX_CANDIDATES: Zod.string().default(String(DefaultMaxCandidates)).transform(Value => Number(Value)),
   URLFILTER_PREFETCH_MULTIPLIER: Zod.string().default('100').transform(Value => Number(Value)),
+  OBSCURA_BIN: Zod.string().default(''),
+  OBSCURA_CONCURRENCY: Zod.string().default('10').transform(Value => Number(Value)),
+  OBSCURA_TIMEOUT_SECONDS: Zod.string().default('30').transform(Value => Number(Value)),
   ORDERING_WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultOrderingWorkerCount() : Number(Value)),
   WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
 }).strip()
@@ -42,6 +45,14 @@ const Env = await Zod.object({
 
     if (!Number.isInteger(Value.URLFILTER_PREFETCH_MULTIPLIER) || Value.URLFILTER_PREFETCH_MULTIPLIER <= 0) {
       Context.addIssue({ code: 'custom', path: ['URLFILTER_PREFETCH_MULTIPLIER'], message: 'URLFILTER_PREFETCH_MULTIPLIER must be a positive integer' })
+    }
+
+    if (!Number.isInteger(Value.OBSCURA_CONCURRENCY) || Value.OBSCURA_CONCURRENCY <= 0) {
+      Context.addIssue({ code: 'custom', path: ['OBSCURA_CONCURRENCY'], message: 'OBSCURA_CONCURRENCY must be a positive integer' })
+    }
+
+    if (!Number.isInteger(Value.OBSCURA_TIMEOUT_SECONDS) || Value.OBSCURA_TIMEOUT_SECONDS <= 0) {
+      Context.addIssue({ code: 'custom', path: ['OBSCURA_TIMEOUT_SECONDS'], message: 'OBSCURA_TIMEOUT_SECONDS must be a positive integer' })
     }
 
     if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
@@ -105,17 +116,24 @@ const Candidates = await BuildDomainCandidates({
   OnOrderingWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
 })
 Core.info(`[dead-domain-pinger] Ordered domains from Git history with up to ${Env.ORDERING_WORKER_COUNT} workers`)
-const { WorkItems: SelectedWork, ConsideredCount, UrlFilterSelectedCount, FallbackCount } = await SelectUrlFilteredProbeWork({
+const { WorkItems: SelectedWork, DirectResults, SelectedDomains, ConsideredCount, ObscuraCheckedCount, ObscuraParkingCount, UrlFilterSelectedCount, FallbackCount } = await SelectUrlFilteredProbeWork({
   Candidates,
   State,
   MaxCandidates: Env.MAX_CANDIDATES,
   PrefetchMultiplier: Env.URLFILTER_PREFETCH_MULTIPLIER,
+  Obscura: Env.OBSCURA_BIN
+    ? { BinaryPath: Env.OBSCURA_BIN, Concurrency: Env.OBSCURA_CONCURRENCY, TimeoutSeconds: Env.OBSCURA_TIMEOUT_SECONDS }
+    : undefined,
   OnWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
 })
+if (!Env.OBSCURA_BIN) {
+  Core.warning('[dead-domain-pinger] OBSCURA_BIN is not set; skipping direct parking verification')
+}
+Core.info(`[dead-domain-pinger] Obscura checked ${ObscuraCheckedCount} jobs and directly identified ${ObscuraParkingCount} parking redirects`)
 Core.info(`[dead-domain-pinger] URL Filter considered ${ConsideredCount} jobs; selected ${UrlFilterSelectedCount} unused domains and used fallback for ${FallbackCount} jobs`)
-Core.info(`[dead-domain-pinger] Selected ${SelectedWork.length} probe jobs with ${Env.WORKER_COUNT} workers (limit ${GlobalpingConfig.Limit} per measurement)`)
+Core.info(`[dead-domain-pinger] Selected ${SelectedDomains.length} total jobs with ${SelectedWork.length} Globalping jobs and ${DirectResults.length} direct parking verdicts`)
 
-const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = await ProbeDomainsWithWorkers({
+const { ProbeResults: GlobalpingResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = await ProbeDomainsWithWorkers({
   WorkItems: SelectedWork,
   ApiToken: Env.GLOBALPING_API_TOKEN,
   Locations: GlobalpingConfig.Locations,
@@ -123,6 +141,11 @@ const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = awai
   CheckedAt,
   WorkerCount: Env.WORKER_COUNT,
   JudgementPreferences: GlobalpingConfig.JudgementPreferences
+})
+const ResultsByDomain = new Map([...DirectResults, ...GlobalpingResults].map(Result => [Result.Domain, Result]))
+const ProbeResults = SelectedDomains.flatMap(Domain => {
+  const Result = ResultsByDomain.get(Domain)
+  return Result ? [Result] : []
 })
 
 // SQLite state is owned by the main process; probe workers only return serializable results.

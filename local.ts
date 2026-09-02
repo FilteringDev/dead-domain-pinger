@@ -16,6 +16,11 @@ Options:
   --max-candidates COUNT   Maximum probe jobs (default: 50)
   --urlfilter-prefetch-multiplier COUNT
                            URL Filter candidates to consider per Globalping job (default: 100)
+  --obscura-bin PATH       Obscura executable for direct parking verification (default: disabled)
+  --obscura-concurrency COUNT
+                           Parallel Obscura stealth browser workers (default: 10)
+  --obscura-timeout-seconds COUNT
+                           Per-navigation Obscura stealth timeout in seconds (default: 30)
   --worker-count COUNT     Probe worker-thread count (default: os.cpus().length)
   --ordering-worker-count COUNT
                            Per-line Git history workers (default: os.availableParallelism())

@@ -6,8 +6,8 @@ test('GoDaddy for-sale redirects are recognized as parking', () => {
   expect(IsParkingServiceHost(' FORSALE.GODADDY.COM. ')).toBe(true)
 })
 
-test('Parking host matching is exact', () => {
-  expect(IsParkingServiceHost('sub.forsale.godaddy.com')).toBe(false)
+test('Parking host matching includes owned subdomains but rejects lookalikes', () => {
+  expect(IsParkingServiceHost('sub.forsale.godaddy.com')).toBe(true)
   expect(IsParkingServiceHost('forsale.godaddy.com.example.org')).toBe(false)
 })
 

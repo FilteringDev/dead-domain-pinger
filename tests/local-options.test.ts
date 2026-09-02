@@ -33,6 +33,9 @@ test('ParseLocalOptions accepts the pnpm separator and provides local defaults',
     FileExtension: '.txt',
     MaxCandidates: '50',
     UrlFilterPrefetchMultiplier: '100',
+    ObscuraBin: '',
+    ObscuraConcurrency: '10',
+    ObscuraTimeoutSeconds: '30',
     WorkerCount: '',
     OrderingWorkerCount: '',
     StatePath
@@ -50,6 +53,9 @@ test('ParseLocalOptions handles tuning flags', () => {
     '--file-extension', '.list',
     '--max-candidates', '12',
     '--urlfilter-prefetch-multiplier', '25',
+    '--obscura-bin', '/usr/local/bin/obscura',
+    '--obscura-concurrency', '8',
+    '--obscura-timeout-seconds', '20',
     '--worker-count', '3',
     '--ordering-worker-count', '2',
     '--state-path', StatePath
@@ -61,6 +67,9 @@ test('ParseLocalOptions handles tuning flags', () => {
     FileExtension: '.list',
     MaxCandidates: '12',
     UrlFilterPrefetchMultiplier: '25',
+    ObscuraBin: '/usr/local/bin/obscura',
+    ObscuraConcurrency: '8',
+    ObscuraTimeoutSeconds: '20',
     WorkerCount: '3',
     OrderingWorkerCount: '2',
     StatePath
@@ -88,6 +97,12 @@ test('ParseLocalOptions rejects missing paths, invalid counts and checkout-conta
     '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
     '--urlfilter-prefetch-multiplier', '0'
   ], Paths.RootDirectory)).toThrow('--urlfilter-prefetch-multiplier must be a positive integer')
+  expect(() => ParseLocalOptions([
+    '--workspace', Paths.WorkingDirectory,
+    '--output', Paths.OutputDirectory,
+    '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
+    '--obscura-concurrency', '0'
+  ], Paths.RootDirectory)).toThrow('--obscura-concurrency must be a positive integer')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
     '--output', Paths.OutputDirectory,
@@ -123,6 +138,9 @@ test('ApplyLocalEnvironment forces preview mode and configures the state cache',
     expect(Process.env.ORDERING_WORKER_COUNT).toBe('')
     expect(Process.env.SCAN_DIRECTORIES).toBe('')
     expect(Process.env.URLFILTER_PREFETCH_MULTIPLIER).toBe('100')
+    expect(Process.env.OBSCURA_BIN).toBe('')
+    expect(Process.env.OBSCURA_CONCURRENCY).toBe('10')
+    expect(Process.env.OBSCURA_TIMEOUT_SECONDS).toBe('30')
   } finally {
     for (const Name of Object.keys(Process.env)) {
       if (!(Name in PreviousEnvironment)) {
