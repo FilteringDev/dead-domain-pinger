@@ -7,6 +7,10 @@ inputs:
     description: 'Directory (relative to the workspace) to scan for filter list files'
     required: false
     default: '.'
+  scan-directories:
+    description: 'Newline-delimited workspace-relative directories whose filter-list domains are eligible for probing and rewriting'
+    required: false
+    default: ''
   file-extension:
     description: 'File extension used by filter list files'
     required: false
@@ -156,6 +160,7 @@ runs:
         CI_WORKSPACE_PATH: ${{ github.workspace }}
         ORDERING_WORKSPACE_PATH: ${{ env.ORDERING_WORKSPACE_PATH }}
         FILTER_ROOT: ${{ inputs.filter-root }}
+        SCAN_DIRECTORIES: ${{ inputs.scan-directories }}
         FILE_EXTENSION: ${{ inputs.file-extension }}
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}

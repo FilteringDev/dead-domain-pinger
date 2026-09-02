@@ -11,6 +11,7 @@ Options:
   --workspace PATH         Target filter-list checkout (required)
   --output PATH            Preview directory outside the target checkout (required)
   --filter-root PATH       Filter directory relative to the checkout (default: .)
+  --scan-directories PATHS Newline-delimited workspace-relative directories eligible for probing and rewriting
   --file-extension EXT     Filter-list extension (default: .txt)
   --max-candidates COUNT   Maximum probe jobs (default: 50)
   --worker-count COUNT     Probe worker-thread count (default: os.cpus().length)

@@ -14,6 +14,7 @@ import { BuildGitDiff, DiffFileName, ResolvePreviewOutputDirectory, WritePreview
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
 import { RewriteFilterContent, type DeadDomainsByOrigin } from './sources/rewrite-filters.ts'
+import { FilterOccurrencesByScanDirectories } from './sources/scan-directories.ts'
 import { ClearPendingProbe, CreateEmptyState, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
 import { DomainOrigins, type DomainOrigin, type RuleChange } from './sources/types.ts'
 
@@ -22,6 +23,7 @@ const Env = await Zod.object({
   ALWAYS_REFRESH: Zod.string().default('false').transform(Value => Value === 'true'),
   PREVIEW_OUTPUT_DIRECTORY: Zod.string().default(''),
   FILTER_ROOT: Zod.string().nonempty().default('.'),
+  SCAN_DIRECTORIES: Zod.string().default(''),
   FILE_EXTENSION: Zod.string().nonempty().default('.txt'),
   STATE_DIRECTORY: Zod.string().nonempty().default('dead-domain-state'),
   SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
@@ -74,6 +76,11 @@ Core.info(`[dead-domain-pinger] Loaded ${FilterFiles.length} filter list files`)
 const Occurrences = CollectDomainOccurrences(WorkingDirectory, FilterFiles)
 const KnownDomains = new Set(Occurrences.map(Occurrence => Occurrence.Domain))
 Core.info(`[dead-domain-pinger] Found ${KnownDomains.size} unique domains in ${Occurrences.length} occurrences`)
+const ScopedOccurrences = FilterOccurrencesByScanDirectories(WorkingDirectory, Occurrences, Env.SCAN_DIRECTORIES)
+const ScopedDomains = new Set(ScopedOccurrences.map(Occurrence => Occurrence.Domain))
+if (Env.SCAN_DIRECTORIES.trim()) {
+  Core.info(`[dead-domain-pinger] Limited candidates to ${ScopedDomains.size} unique domains in ${ScopedOccurrences.length} occurrences under the configured scan directories`)
+}
 
 const State = Env.ALWAYS_REFRESH
   ? CreateEmptyState(GlobalpingConfig.JudgementPreferences.Fingerprint)
@@ -85,7 +92,7 @@ if (await IsShallowRepository(OrderingWorkingDirectory)) {
 
 const Candidates = await BuildDomainCandidates({
   WorkingDirectory: OrderingWorkingDirectory,
-  Occurrences,
+  Occurrences: ScopedOccurrences,
   State,
   FallbackAuthorTime: CheckedAt,
   OrderingWorkerCount: Env.ORDERING_WORKER_COUNT,

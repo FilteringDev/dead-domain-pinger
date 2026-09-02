@@ -29,6 +29,7 @@ test('ParseLocalOptions accepts the pnpm separator and provides local defaults',
     Workspace: Paths.WorkingDirectory,
     OutputDirectory: Paths.OutputDirectory,
     FilterRoot: '.',
+    ScanDirectories: '',
     FileExtension: '.txt',
     MaxCandidates: '50',
     WorkerCount: '',
@@ -44,6 +45,7 @@ test('ParseLocalOptions handles tuning flags', () => {
     '--workspace', Paths.WorkingDirectory,
     '--output', Paths.OutputDirectory,
     '--filter-root', 'filters',
+    '--scan-directories', 'filters/ads\nfilters/privacy',
     '--file-extension', '.list',
     '--max-candidates', '12',
     '--worker-count', '3',
@@ -53,6 +55,7 @@ test('ParseLocalOptions handles tuning flags', () => {
 
   expect(Options).toMatchObject({
     FilterRoot: 'filters',
+    ScanDirectories: 'filters/ads\nfilters/privacy',
     FileExtension: '.list',
     MaxCandidates: '12',
     WorkerCount: '3',
@@ -109,6 +112,7 @@ test('ApplyLocalEnvironment forces preview mode and configures the state cache',
     expect(Process.env.SQLITE_STATE_PATH).toBe(Path.join(Paths.RootDirectory, 'state.sqlite'))
     expect(Process.env.GIT_OPTIONAL_LOCKS).toBe('0')
     expect(Process.env.ORDERING_WORKER_COUNT).toBe('')
+    expect(Process.env.SCAN_DIRECTORIES).toBe('')
   } finally {
     for (const Name of Object.keys(Process.env)) {
       if (!(Name in PreviousEnvironment)) {

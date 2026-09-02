@@ -30,6 +30,9 @@ left unchanged and do not enter the probe queue.
 - uses: FilteringDev/dead-domain-pinger@v1
   with:
     filter-root: filterslists
+    scan-directories: |
+      filterslists/ads
+      filterslists/privacy
     max-candidates: '50'
     state-directory: dead-domain-state
     state-artifact-name: dead-domain-pinger-state
@@ -88,9 +91,9 @@ git apply /path/to/dead-domain-preview/dead-domain.diff
 
 An empty diff means no filter changes were proposed. The local runner requires a read-only
 SQLite snapshot through `--state-path`, so domain ages and queued HTTP follow-ups use the same
-persisted state as the workflow. It also accepts `--filter-root`, `--file-extension`,
-`--max-candidates`, `--worker-count`, and `--ordering-worker-count`; run it with `--help` for
-the complete interface.
+persisted state as the workflow. It also accepts `--filter-root`, `--scan-directories`,
+`--file-extension`, `--max-candidates`, `--worker-count`, and `--ordering-worker-count`; run it
+with `--help` for the complete interface.
 
 In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
 artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
@@ -101,6 +104,7 @@ reports whether the preview diff is non-empty.
 | Name | Default | Description |
 | --- | --- | --- |
 | `filter-root` | `.` | Directory (relative to the workspace) to scan for filter list files |
+| `scan-directories` | - | Newline-delimited workspace-relative directories. Only domains currently found in these directory subtrees are eligible for probing and rewriting; empty scans every file under `filter-root`. |
 | `file-extension` | `.txt` | File extension used by filter list files |
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
 | `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
@@ -115,6 +119,11 @@ reports whether the preview diff is non-empty.
 | `cleanup-pr-label` | - | Optional label required when selecting older pull requests |
 | `pr-base` | repository default branch | Base branch for the generated pull request |
 | `pr-title` | `Remove dead domains` | Title for the generated pull request |
+
+`scan-directories` narrows current candidate selection and filter rewrites after filter files are
+discovered under `filter-root`. State pruning still considers domains found in all discovered filter
+files, so a verdict, pending retry, or Git-order cache entry remains available while that domain
+also appears outside the configured directories.
 
 ## Globalping configuration
 

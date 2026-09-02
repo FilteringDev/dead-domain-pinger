@@ -10,6 +10,7 @@ export type LocalOptions = {
   Workspace: string
   OutputDirectory: string
   FilterRoot: string
+  ScanDirectories: string
   FileExtension: string
   MaxCandidates: string
   WorkerCount: string
@@ -45,6 +46,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       'workspace': { type: 'string' },
       'output': { type: 'string' },
       'filter-root': { type: 'string', default: '.' },
+      'scan-directories': { type: 'string', default: '' },
       'file-extension': { type: 'string', default: '.txt' },
       'max-candidates': { type: 'string' },
       'worker-count': { type: 'string' },
@@ -61,6 +63,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       Workspace: '',
       OutputDirectory: '',
       FilterRoot: '.',
+      ScanDirectories: '',
       FileExtension: '.txt',
       MaxCandidates: String(DefaultMaxCandidates),
       WorkerCount: '',
@@ -83,6 +86,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     Workspace,
     OutputDirectory: ResolvePreviewOutputDirectory(Workspace, RequestedOutputDirectory),
     FilterRoot: RequireOption(Parsed.values['filter-root'], '--filter-root'),
+    ScanDirectories: Parsed.values['scan-directories'] ?? '',
     FileExtension: RequireOption(Parsed.values['file-extension'], '--file-extension'),
     MaxCandidates: ParsePositiveInteger(Parsed.values['max-candidates'], '--max-candidates', String(DefaultMaxCandidates)),
     WorkerCount: Parsed.values['worker-count']
@@ -100,6 +104,7 @@ export function ApplyLocalEnvironment(Options: LocalOptions): void {
   Process.env.ORDERING_WORKSPACE_PATH = Options.Workspace
   Process.env.PREVIEW_OUTPUT_DIRECTORY = Options.OutputDirectory
   Process.env.FILTER_ROOT = Options.FilterRoot
+  Process.env.SCAN_DIRECTORIES = Options.ScanDirectories
   Process.env.FILE_EXTENSION = Options.FileExtension
   Process.env.MAX_CANDIDATES = Options.MaxCandidates
   Process.env.WORKER_COUNT = Options.WorkerCount
