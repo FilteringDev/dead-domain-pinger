@@ -1,5 +1,5 @@
 import { GetDomainModifiedTimes } from './domain-history.ts'
-import type { GitHistoryFailure } from './domain-history.ts'
+import type { GitHistoryFailure, GitOrderCacheEntry } from './domain-history.ts'
 import type { DomainOccurrence } from './types.ts'
 
 export type OrderingWorkerTask = {
@@ -7,12 +7,16 @@ export type OrderingWorkerTask = {
   FilePath: string
   Occurrences: DomainOccurrence[]
   FallbackAuthorTime: number
+  CacheRevision?: string
+  CachedEntries?: GitOrderCacheEntry[]
 }
 
 export type OrderingWorkerResult = {
   FilePath: string
   ModifiedTimes: Array<[string, number]>
   Failures: GitHistoryFailure[]
+  CacheRevision?: string
+  CacheEntries?: GitOrderCacheEntry[]
 }
 
 export default async function OrderingWorkerHandler(Task: OrderingWorkerTask): Promise<OrderingWorkerResult> {
@@ -22,8 +26,26 @@ export default async function OrderingWorkerHandler(Task: OrderingWorkerTask): P
     Task.FilePath,
     Task.Occurrences,
     Task.FallbackAuthorTime,
-    Failures
+    Failures,
+    Task.CachedEntries
   )
 
-  return { FilePath: Task.FilePath, ModifiedTimes: [...ModifiedTimes.entries()], Failures }
+  const CacheEntries = Task.CacheRevision && Failures.length === 0
+    ? Task.Occurrences.flatMap(Occurrence => {
+      const ModifiedAt = ModifiedTimes.get(Occurrence.Domain)
+      return ModifiedAt === undefined ? [] : [{
+        LineNumber: Occurrence.LineNumber,
+        Domain: Occurrence.Domain,
+        ModifiedAt
+      }]
+    })
+    : undefined
+
+  return {
+    FilePath: Task.FilePath,
+    ModifiedTimes: [...ModifiedTimes.entries()],
+    Failures,
+    ...(Task.CacheRevision ? { CacheRevision: Task.CacheRevision } : {}),
+    ...(CacheEntries ? { CacheEntries } : {})
+  }
 }

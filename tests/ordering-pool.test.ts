@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 import * as Os from 'node:os'
 import { GetDefaultOrderingWorkerCount, GetDomainModifiedTimesWithWorkers } from '../sources/ordering-pool.ts'
+import { CreateEmptyState } from '../sources/state.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 
 function Occurrence(Domain: string, FilePath: string, LineNumber = 1): DomainOccurrence {
@@ -105,6 +106,82 @@ test('GetDomainModifiedTimesWithWorkers keeps domains from the same line in one 
   })
 
   expect(TaskSizes.sort((Left, Right) => Left - Right)).toEqual([1, 2])
+})
+
+test('GetDomainModifiedTimesWithWorkers passes valid state cache entries to workers and retains refreshed entries', async () => {
+  const State = CreateEmptyState()
+  State.GitOrderCache = [{
+    FilePath: 'list.txt',
+    Revision: 'a'.repeat(40),
+    LineNumber: 1,
+    Domain: 'first.example',
+    ModifiedAt: 10
+  }]
+
+  await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile: new Map([['list.txt', [Occurrence('first.example', 'list.txt')]]]),
+    FallbackAuthorTime: 100,
+    WorkerCount: 1,
+    State,
+    ResolveFileRevision: () => Promise.resolve('a'.repeat(40)),
+    RunWorker: Task => {
+      expect(Task.CachedEntries).toEqual([{ LineNumber: 1, Domain: 'first.example', ModifiedAt: 10 }])
+      return Promise.resolve({
+        FilePath: Task.FilePath,
+        ModifiedTimes: [['first.example', 10]],
+        Failures: [],
+        CacheRevision: Task.CacheRevision,
+        CacheEntries: Task.CachedEntries
+      })
+    }
+  })
+
+  expect(State.GitOrderCache).toEqual([{
+    FilePath: 'list.txt',
+    Revision: 'a'.repeat(40),
+    LineNumber: 1,
+    Domain: 'first.example',
+    ModifiedAt: 10
+  }])
+})
+
+test('GetDomainModifiedTimesWithWorkers replaces stale entries when a filter revision changes', async () => {
+  const State = CreateEmptyState()
+  State.GitOrderCache = [{
+    FilePath: 'list.txt',
+    Revision: 'a'.repeat(40),
+    LineNumber: 1,
+    Domain: 'first.example',
+    ModifiedAt: 10
+  }]
+
+  await GetDomainModifiedTimesWithWorkers({
+    WorkingDirectory: '/filters',
+    OccurrencesByFile: new Map([['list.txt', [Occurrence('first.example', 'list.txt')]]]),
+    FallbackAuthorTime: 100,
+    WorkerCount: 1,
+    State,
+    ResolveFileRevision: () => Promise.resolve('b'.repeat(40)),
+    RunWorker: Task => {
+      expect(Task.CachedEntries).toEqual([])
+      return Promise.resolve({
+        FilePath: Task.FilePath,
+        ModifiedTimes: [['first.example', 20]],
+        Failures: [],
+        CacheRevision: Task.CacheRevision,
+        CacheEntries: [{ LineNumber: 1, Domain: 'first.example', ModifiedAt: 20 }]
+      })
+    }
+  })
+
+  expect(State.GitOrderCache).toEqual([{
+    FilePath: 'list.txt',
+    Revision: 'b'.repeat(40),
+    LineNumber: 1,
+    Domain: 'first.example',
+    ModifiedAt: 20
+  }])
 })
 
 test('GetDomainModifiedTimesWithWorkers merges partial file results using the newest domain time', async () => {

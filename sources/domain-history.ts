@@ -19,6 +19,12 @@ export type GitHistoryFailure = {
   Message: string
 }
 
+export type GitOrderCacheEntry = {
+  LineNumber: number
+  Domain: string
+  ModifiedAt: number
+}
+
 type GitOutcome = {
   Succeeded: boolean
   Message: string
@@ -171,6 +177,36 @@ async function RunGitRecords(
   }
 
   return { Succeeded: true, Message: '' }
+}
+
+/** Returns the last commit that changed a clean, tracked file, or null when it cannot be cached. */
+export async function GetFileHistoryRevision(WorkingDirectory: string, FilePath: string): Promise<string | null> {
+  let Status = ''
+  const StatusOutcome = await RunGitRecords(
+    WorkingDirectory,
+    ['status', '--porcelain', '--', FilePath],
+    '\n',
+    Line => {
+      Status += Line
+      return true
+    }
+  )
+  if (!StatusOutcome.Succeeded || Status) {
+    return null
+  }
+
+  let Revision = ''
+  const RevisionOutcome = await RunGitRecords(
+    WorkingDirectory,
+    ['log', '-n', '1', '--format=%H', '--', FilePath],
+    '\n',
+    Line => {
+      Revision = Line.trim()
+      return false
+    }
+  )
+
+  return RevisionOutcome.Succeeded && /^[0-9a-f]{40}$/u.test(Revision) ? Revision : null
 }
 
 /** Adds only domains relevant to the current file, avoiding raw diff-line retention. */
@@ -478,9 +514,11 @@ export async function GetDomainModifiedTimes(
   FilePath: string,
   Occurrences: DomainOccurrence[],
   FallbackAuthorTime: number,
-  Failures: GitHistoryFailure[] = []
+  Failures: GitHistoryFailure[] = [],
+  CachedEntries: GitOrderCacheEntry[] = []
 ): Promise<Map<string, number>> {
   const DomainsByLine = new Map<number, Set<string>>()
+  const CachedModifiedTimes = new Map<string, number>()
   const RelevantDomains = new Set<string>()
   for (const Occurrence of Occurrences) {
     RelevantDomains.add(Occurrence.Domain)
@@ -489,7 +527,20 @@ export async function GetDomainModifiedTimes(
     DomainsByLine.set(Occurrence.LineNumber, LineDomains)
   }
 
-  const Blame = await GetLineBlame(WorkingDirectory, FilePath, new Set(DomainsByLine.keys()), Failures)
+  for (const Entry of CachedEntries) {
+    if (DomainsByLine.get(Entry.LineNumber)?.has(Entry.Domain)) {
+      CachedModifiedTimes.set(`${Entry.LineNumber}\u0000${Entry.Domain}`, Entry.ModifiedAt)
+    }
+  }
+
+  const UncachedLines = new Set<number>()
+  for (const [LineNumber, Domains] of DomainsByLine) {
+    if ([...Domains].some(Domain => !CachedModifiedTimes.has(`${LineNumber}\u0000${Domain}`))) {
+      UncachedLines.add(LineNumber)
+    }
+  }
+
+  const Blame = await GetLineBlame(WorkingDirectory, FilePath, UncachedLines, Failures)
   const IntroducedDomainsByCommit: CommitIntroductionCache = new Map()
   const ModifiedTimes = new Map<string, number>()
   const FallbackOccurrences: FallbackOccurrence[] = []
@@ -512,17 +563,29 @@ export async function GetDomainModifiedTimes(
   }
 
   for (const [LineNumber, Domains] of DomainsByLine) {
+    const RemainingDomains = new Set<string>()
+    for (const Domain of Domains) {
+      const CachedModifiedAt = CachedModifiedTimes.get(`${LineNumber}\u0000${Domain}`)
+      if (CachedModifiedAt === undefined) {
+        RemainingDomains.add(Domain)
+      } else {
+        SetNewestTime(ModifiedTimes, Domain, CachedModifiedAt)
+      }
+    }
+    if (RemainingDomains.size === 0) {
+      continue
+    }
+
     const LineBlameEntry = Blame.get(LineNumber)
     if (!LineBlameEntry) {
-      for (const Domain of Domains) {
+      for (const Domain of RemainingDomains) {
         SetNewestTime(ModifiedTimes, Domain, FallbackAuthorTime)
       }
       continue
     }
 
-    const RemainingDomains = new Set(Domains)
     const BlameIntroductions = await IntroducedDomainsOf(LineBlameEntry.Commit)
-    for (const Domain of Domains) {
+    for (const Domain of RemainingDomains) {
       if (BlameIntroductions.has(Domain)) {
         SetNewestTime(ModifiedTimes, Domain, LineBlameEntry.AuthorTime)
         RemainingDomains.delete(Domain)

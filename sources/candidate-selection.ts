@@ -23,6 +23,7 @@ export async function BuildDomainCandidates(Options: BuildCandidatesOptions): Pr
     OccurrencesByFile,
     FallbackAuthorTime: Options.FallbackAuthorTime,
     WorkerCount: Options.OrderingWorkerCount ?? GetDefaultOrderingWorkerCount(),
+    State: Options.State,
     OnWarning: Options.OnOrderingWarning
   })
 

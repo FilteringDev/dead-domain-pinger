@@ -287,6 +287,13 @@ SQLite loading, verdict recording and saving stay in the main process. Probe wor
 the database file; they send serializable probe results back to the main process, which updates the
 state.
 
+The state database also caches Git-derived domain modification times. The main process supplies
+valid cache entries to ordering workers, which skip deep-history lookups for cache hits and return
+new entries for cache misses. A cache entry is valid while its filter file has the same most recent
+Git commit; unrelated commits retain it, while a filter-file change or local uncommitted edit causes
+that file to be indexed again. The first run has no Git ordering cache, and dry runs continue to
+read the cache without updating it.
+
 Each domain is dated individually from the git history: adding a domain to an existing rule
 refreshes only that domain, and moving or reformatting a rule keeps the dates of the domains it
 already carried. This needs the full history, so check the repository out with `fetch-depth: 0`.

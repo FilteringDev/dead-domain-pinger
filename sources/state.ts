@@ -8,6 +8,14 @@ import type { DomainVerdict, PendingProbe, PriorityProbeKind } from './types.ts'
 
 export const StateFileName = 'dead-domain-state.sqlite'
 
+const GitOrderCacheEntrySchema = Zod.object({
+  FilePath: Zod.string().nonempty(),
+  Revision: Zod.string().nonempty(),
+  LineNumber: Zod.number().int().positive(),
+  Domain: Zod.string().nonempty(),
+  ModifiedAt: Zod.number()
+})
+
 const Require = createRequire(import.meta.url)
 const SqlWasmPath = Require.resolve('sql.js/dist/sql-wasm.wasm')
 
@@ -23,7 +31,8 @@ const StateSchema = Zod.object({
   PendingProbes: Zod.record(Zod.string(), Zod.object({
     Target: Zod.string().nonempty(),
     Kind: Zod.enum(['RetryOriginalHttp', 'TryWwwHttp'])
-  }))
+  })),
+  GitOrderCache: Zod.array(GitOrderCacheEntrySchema)
 })
 
 const DomainStateRowSchema = Zod.object({
@@ -40,9 +49,18 @@ const PendingProbeRowSchema = Zod.object({
   kind: Zod.enum(['RetryOriginalHttp', 'TryWwwHttp'])
 })
 
+const GitOrderCacheRowSchema = Zod.object({
+  file_path: Zod.string().nonempty(),
+  revision: Zod.string().nonempty(),
+  line_number: Zod.number().int().positive(),
+  domain: Zod.string().nonempty(),
+  modified_at: Zod.number()
+})
+
 const WarningsSchema = Zod.array(Zod.string())
 
 export type DeadDomainState = Zod.infer<typeof StateSchema>
+export type GitOrderCacheEntry = Zod.infer<typeof GitOrderCacheEntrySchema>
 
 let SqlJsPromise: ReturnType<typeof InitSqlJs> | null = null
 
@@ -66,6 +84,7 @@ function EnsureSchema(Database: InstanceType<(Awaited<ReturnType<typeof InitSqlJ
   Database.exec('create table if not exists metadata (key text primary key, value text not null)')
   Database.exec('create table if not exists domain_state (domain text primary key, last_checked_at integer not null, last_verdict text not null, last_warnings_json text, modified_at_override integer)')
   Database.exec('create table if not exists pending_probe (source_domain text primary key, target text not null, kind text not null)')
+  Database.exec('create table if not exists git_order_cache (file_path text not null, revision text not null, line_number integer not null, domain text not null, modified_at integer not null, primary key (file_path, revision, line_number, domain))')
 
   Database.run('insert or replace into metadata (key, value) values (?, ?)', ['version', '1'])
 }
@@ -105,7 +124,8 @@ export function CreateEmptyState(PolicyFingerprint?: string): DeadDomainState {
     Version: 1,
     ...(PolicyFingerprint ? { PolicyFingerprint } : {}),
     Domains: {},
-    PendingProbes: {}
+    PendingProbes: {},
+    GitOrderCache: []
   }
 }
 
@@ -148,6 +168,22 @@ export async function LoadState(StateFilePath: string, ExpectedPolicyFingerprint
         }
       } finally {
         PendingStatement.free()
+      }
+
+      const CacheStatement = Database.prepare('select file_path, revision, line_number, domain, modified_at from git_order_cache order by file_path, revision, line_number, domain')
+      try {
+        while (CacheStatement.step()) {
+          const Row = GitOrderCacheRowSchema.parse(CacheStatement.getAsObject())
+          State.GitOrderCache.push({
+            FilePath: Row.file_path,
+            Revision: Row.revision,
+            LineNumber: Row.line_number,
+            Domain: Row.domain,
+            ModifiedAt: Row.modified_at
+          })
+        }
+      } finally {
+        CacheStatement.free()
       }
 
       return StateSchema.parse(State)
@@ -218,6 +254,7 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
       Pruned.PendingProbes[SourceDomain] = Probe
     }
   }
+  Pruned.GitOrderCache = State.GitOrderCache.filter(Entry => KnownDomains.has(Entry.Domain))
 
   const Database = await OpenStateDatabase(StateFilePath)
   Fs.mkdirSync(Path.dirname(StateFilePath), { recursive: true })
@@ -226,6 +263,7 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
     Database.exec('begin transaction')
     Database.exec('delete from domain_state')
     Database.exec('delete from pending_probe')
+    Database.exec('delete from git_order_cache')
     if (Pruned.PolicyFingerprint) {
       Database.run('insert or replace into metadata (key, value) values (?, ?)', [
         'judgement_policy_fingerprint',
@@ -257,6 +295,20 @@ export async function SaveState(StateFilePath: string, State: DeadDomainState, K
       }
     } finally {
       PendingStatement.free()
+    }
+
+    const CacheStatement = Database.prepare('insert into git_order_cache (file_path, revision, line_number, domain, modified_at) values (?, ?, ?, ?, ?)')
+    try {
+      for (const Entry of Pruned.GitOrderCache.sort((Left, Right) => {
+        return Left.FilePath.localeCompare(Right.FilePath)
+          || Left.Revision.localeCompare(Right.Revision)
+          || Left.LineNumber - Right.LineNumber
+          || Left.Domain.localeCompare(Right.Domain)
+      })) {
+        CacheStatement.run([Entry.FilePath, Entry.Revision, Entry.LineNumber, Entry.Domain, Entry.ModifiedAt])
+      }
+    } finally {
+      CacheStatement.free()
     }
 
     Database.exec('commit')

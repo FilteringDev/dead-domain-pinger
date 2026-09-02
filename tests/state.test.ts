@@ -90,6 +90,28 @@ test('SQLite state falls back to empty when missing', async () => {
   expect(LoadedState).toEqual(CreateEmptyState())
 })
 
+test('SQLite state persists and prunes Git ordering cache entries', async () => {
+  const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
+  const StateFilePath = Path.join(StateDirectory, StateFileName)
+  const State = CreateEmptyState()
+  State.GitOrderCache = [
+    { FilePath: 'filters.txt', Revision: 'a'.repeat(40), LineNumber: 1, Domain: 'kept.example', ModifiedAt: 1000 },
+    { FilePath: 'filters.txt', Revision: 'a'.repeat(40), LineNumber: 2, Domain: 'removed.example', ModifiedAt: 2000 }
+  ]
+
+  await SaveState(StateFilePath, State, new Set(['kept.example']))
+
+  await expect(LoadState(StateFilePath)).resolves.toMatchObject({
+    GitOrderCache: [{
+      FilePath: 'filters.txt',
+      Revision: 'a'.repeat(40),
+      LineNumber: 1,
+      Domain: 'kept.example',
+      ModifiedAt: 1000
+    }]
+  })
+})
+
 test('SQLite state falls back to empty when corrupt', async () => {
   const StateDirectory = Fs.mkdtempSync(Path.join(Os.tmpdir(), 'dead-domain-state-'))
   const StateFilePath = Path.join(StateDirectory, StateFileName)

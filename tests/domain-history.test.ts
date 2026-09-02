@@ -2,7 +2,7 @@ import { expect, test } from 'vitest'
 import * as Fs from 'node:fs'
 import * as Os from 'node:os'
 import * as Path from 'node:path'
-import { ConsumeSeparatedRecords, GetDomainModifiedTimes } from '../sources/domain-history.ts'
+import { ConsumeSeparatedRecords, GetDomainModifiedTimes, GetFileHistoryRevision } from '../sources/domain-history.ts'
 import type { GitHistoryFailure } from '../sources/domain-history.ts'
 import type { DomainOccurrence } from '../sources/types.ts'
 import { RunGit } from './git.ts'
@@ -106,6 +106,37 @@ test('Uncommitted files fall back to the given time', async () => {
   ], 9000)
 
   expect(ModifiedTimes.get('fresh.example.dev')).toBe(9000)
+})
+
+test('Cached entries skip Git history lookups', async () => {
+  const Failures: GitHistoryFailure[] = []
+  const ModifiedTimes = await GetDomainModifiedTimes('/path/that/does/not/exist', FileName, [
+    Occurrence('first.example.com', 1)
+  ], 9000, Failures, [{
+    LineNumber: 1,
+    Domain: 'first.example.com',
+    ModifiedAt: 1000
+  }])
+
+  expect(ModifiedTimes).toEqual(new Map([['first.example.com', 1000]]))
+  expect(Failures).toEqual([])
+})
+
+test('A file revision remains stable for unrelated commits and changes with the filter file', async () => {
+  const Directory = await CreateRepository()
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com\n', 1000)
+  const InitialRevision = await GetFileHistoryRevision(Directory, FileName)
+
+  Fs.writeFileSync(Path.join(Directory, 'unrelated.txt'), 'unrelated\n')
+  await RunGit(Directory, ['add', '--all'])
+  await RunGit(Directory, ['commit', '--quiet', '-m', 'Unrelated change'])
+
+  expect(await GetFileHistoryRevision(Directory, FileName)).toBe(InitialRevision)
+  await Commit(Directory, '||ads.example.net^$domain=first.example.com|second.example.org\n', 2000)
+  expect(await GetFileHistoryRevision(Directory, FileName)).not.toBe(InitialRevision)
+
+  Fs.writeFileSync(Path.join(Directory, FileName), '||ads.example.net^$domain=local.example.dev\n')
+  await expect(GetFileHistoryRevision(Directory, FileName)).resolves.toBe(null)
 })
 
 test('ConsumeSeparatedRecords yields records before the remaining history is available', async () => {
