@@ -1,0 +1,113 @@
+name: 'Dead Domain Pinger Postprocess'
+description: 'Merges worker candidates, performs Globalping verification, rewrites filters, and writes the run state'
+
+inputs:
+  filter-root:
+    description: 'Directory relative to the workspace containing filter files'
+    required: false
+    default: '.'
+  file-extension:
+    description: 'Filter file extension'
+    required: false
+    default: '.txt'
+  max-candidates:
+    description: 'Global maximum number of Globalping probe jobs'
+    required: false
+    default: '50'
+  globalping-api-token:
+    description: 'Globalping access token'
+    required: true
+  worker-count:
+    description: 'Node worker threads for final Globalping probes'
+    required: false
+    default: ''
+  expected-worker-count:
+    description: 'Number emitted by matrix-build'
+    required: true
+  worker-artifact-prefix:
+    description: 'Worker result artifact prefix'
+    required: false
+    default: 'dead-domain-pinger-worker'
+  state-directory:
+    description: 'Workspace directory for reports and pull-request body'
+    required: false
+    default: 'dead-domain-state'
+  state-artifact-name:
+    description: 'Artifact name for this run SQLite state'
+    required: false
+    default: 'dead-domain-pinger-state'
+  report-artifact-name:
+    description: 'Artifact name for the final report'
+    required: false
+    default: 'dead-domain-pinger-report'
+  dry-run:
+    description: 'Emit a preview diff and report without writing filter files or SQLite state'
+    required: false
+    default: 'false'
+
+outputs:
+  has_changes:
+    value: ${{ steps.postprocess.outputs.has_changes }}
+  dead_domains:
+    value: ${{ steps.postprocess.outputs.dead_domains }}
+  changed_files:
+    value: ${{ steps.postprocess.outputs.changed_files }}
+  probed_count:
+    value: ${{ steps.postprocess.outputs.probed_count }}
+  report_path:
+    value: ${{ steps.postprocess.outputs.report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install pnpm
+      run: npm install --global pnpm
+      shell: bash
+    - name: Install dependencies
+      run: pnpm install --no-lockfile
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Download worker artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ inputs.worker-artifact-prefix }}-*
+        path: ${{ runner.temp }}/dead-domain-pinger-workers
+        merge-multiple: true
+    - name: Prepare preview output directory
+      if: inputs.dry-run == 'true'
+      id: preview
+      run: echo "path=$(mktemp -d \"${RUNNER_TEMP}/dead-domain-pinger-preview-XXXXXX\")" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - name: Merge and verify candidates
+      id: postprocess
+      env:
+        CI_WORKSPACE_PATH: ${{ github.workspace }}
+        FILTER_ROOT: ${{ inputs.filter-root }}
+        FILE_EXTENSION: ${{ inputs.file-extension }}
+        MAX_CANDIDATES: ${{ inputs.max-candidates }}
+        GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
+        WORKER_COUNT: ${{ inputs.worker-count }}
+        EXPECTED_WORKER_COUNT: ${{ inputs.expected-worker-count }}
+        WORKER_ARTIFACT_DIRECTORY: ${{ runner.temp }}/dead-domain-pinger-workers
+        STATE_DIRECTORY: ${{ inputs.state-directory }}
+        SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
+        DRY_RUN: ${{ inputs.dry-run }}
+        PREVIEW_OUTPUT_DIRECTORY: ${{ steps.preview.outputs.path }}
+      run: pnpm exec tsx postprocess.ts
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Upload final report
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.report-artifact-name }}
+        path: ${{ inputs.dry-run == 'true' && steps.preview.outputs.path || inputs.state-directory }}
+        if-no-files-found: error
+        compression-level: 9
+    - name: Upload SQLite state
+      if: inputs.dry-run != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.state-artifact-name }}
+        path: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite
+        if-no-files-found: error
+        compression-level: 9

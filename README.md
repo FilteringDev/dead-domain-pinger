@@ -61,7 +61,7 @@ steps:
     with:
       fetch-depth: 0
 
-  - uses: FilteringDev/dead-domain-pinger@v1
+  - uses: FilteringDev/dead-domain-pinger@VERSION
     with:
       create-pr: 'true'
       globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
@@ -73,6 +73,88 @@ created. Set `cleanup-pr-label` to require a label when selecting older pull req
 no changes and dry runs do not commit, push, close, or create pull requests. Automatic pull
 requests require a trusted scheduled or manual workflow; fork pull requests generally cannot
 provide the required secret or write permissions.
+
+## Matrix workflow
+
+For large repositories, use the staged v2 actions so Git history indexing and the AdGuard URL
+Filter prefilter run once per directory scope. `postprocess` then merges all worker outputs,
+deduplicates domains, restores global oldest-first order, applies `max-candidates` once, and is
+the only job that calls Globalping or writes SQLite state.
+
+```yaml
+name: Dead domain cleanup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  matrix-build:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      worker_count: ${{ steps.matrix.outputs.worker_count }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: matrix
+        uses: FilteringDev/dead-domain-pinger/matrix-build@VERSION
+        with:
+          scan-directories: |
+            SpywareFilter
+            BaseFilter
+            SocialFilter
+
+  worker:
+    needs: matrix-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-build.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: FilteringDev/dead-domain-pinger/worker@VERSION
+        with:
+          filter-root: .
+          scan-directory: ${{ matrix.Directory }}
+          scope-id: ${{ matrix.Id }}
+          worker-artifact-prefix: dead-domain-worker
+
+  postprocess:
+    needs: [matrix-build, worker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: FilteringDev/dead-domain-pinger/postprocess@VERSION
+        with:
+          filter-root: .
+          max-candidates: '50'
+          globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
+          expected-worker-count: ${{ needs.matrix-build.outputs.worker_count }}
+          worker-artifact-prefix: dead-domain-worker
+          state-artifact-name: dead-domain-pinger-state
+          report-artifact-name: dead-domain-pinger-report
+```
+
+`matrix-build` receives the newline-delimited directory scopes. It removes nested scopes, so a
+file cannot be handled by two workers. When the input is empty it emits one `.` scope. Each
+`worker` uploads exactly one versioned JSON artifact named
+`<worker-artifact-prefix>-<scope-id>`; it contains only Git-history and URL Filter candidate
+data, never credentials or Globalping verdicts.
+
+`postprocess` must run after every worker and use the matching artifact prefix plus
+`expected-worker-count`. It fails when a result is missing or duplicated rather than rewriting
+filters from partial data. It inventories the full `filter-root` before saving state, preserving
+SQLite entries for domains outside the matrix scopes. The SQLite artifact is created and uploaded
+only by `postprocess` for that workflow run. Artifacts are scoped to a workflow run; use a
+separate durable store if state must be restored by a later workflow run.
+
+Use `dry-run: 'true'` on `postprocess` to produce only the report and diff artifact. Workers do
+not require `GLOBALPING_API_TOKEN`; provide that secret only to `postprocess`.
 
 ## Local preview and debugging
 

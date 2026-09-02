@@ -1,0 +1,35 @@
+name: 'Dead Domain Pinger Matrix Build'
+description: 'Creates non-overlapping directory scopes for dead-domain-pinger workers'
+
+inputs:
+  scan-directories:
+    description: 'Newline-delimited workspace-relative directories; empty creates one whole-workspace scope'
+    required: false
+    default: ''
+
+outputs:
+  matrix:
+    description: 'JSON object suitable for strategy.matrix'
+    value: ${{ steps.build.outputs.matrix }}
+  worker_count:
+    description: 'Number of worker scopes'
+    value: ${{ steps.build.outputs.worker_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install pnpm
+      run: npm install --global pnpm
+      shell: bash
+    - name: Install dependencies
+      run: pnpm install --no-lockfile
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Build matrix
+      id: build
+      env:
+        CI_WORKSPACE_PATH: ${{ github.workspace }}
+        SCAN_DIRECTORIES: ${{ inputs.scan-directories }}
+      run: pnpm exec tsx matrix-build.ts
+      shell: bash
+      working-directory: ${{ github.action_path }}

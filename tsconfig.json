@@ -14,6 +14,9 @@
   "include": [
     "index.ts",
     "local.ts",
+    "matrix-build.ts",
+    "worker.ts",
+    "postprocess.ts",
     "sources/**/*.ts",
     "tests/**/*.ts"
   ]

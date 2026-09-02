@@ -1,0 +1,67 @@
+name: 'Dead Domain Pinger Worker'
+description: 'Indexes Git history and prefilters one directory scope with AdGuard URL Filter'
+
+inputs:
+  filter-root:
+    description: 'Directory relative to the workspace containing filter files'
+    required: false
+    default: '.'
+  scan-directory:
+    description: 'One workspace-relative matrix scope'
+    required: true
+  scope-id:
+    description: 'Stable identifier from matrix-build'
+    required: true
+  file-extension:
+    description: 'Filter file extension'
+    required: false
+    default: '.txt'
+  ordering-worker-count:
+    description: 'Maximum concurrent Git history workers'
+    required: false
+    default: ''
+  urlfilter-prefetch-multiplier:
+    description: 'URL Filter prefetch window multiplier'
+    required: false
+    default: '100'
+  worker-artifact-prefix:
+    description: 'Prefix for this worker result artifact'
+    required: false
+    default: 'dead-domain-pinger-worker'
+
+outputs:
+  candidate_count:
+    description: 'URL Filter-selected candidates in this scope'
+    value: ${{ steps.worker.outputs.candidate_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install pnpm
+      run: npm install --global pnpm
+      shell: bash
+    - name: Install dependencies
+      run: pnpm install --no-lockfile
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Index and prefilter scope
+      id: worker
+      env:
+        CI_WORKSPACE_PATH: ${{ github.workspace }}
+        FILTER_ROOT: ${{ inputs.filter-root }}
+        SCAN_DIRECTORY: ${{ inputs.scan-directory }}
+        SCOPE_ID: ${{ inputs.scope-id }}
+        FILE_EXTENSION: ${{ inputs.file-extension }}
+        ORDERING_WORKER_COUNT: ${{ inputs.ordering-worker-count }}
+        URLFILTER_PREFETCH_MULTIPLIER: ${{ inputs.urlfilter-prefetch-multiplier }}
+        WORKER_ARTIFACT_PATH: ${{ runner.temp }}/dead-domain-pinger-worker/${{ inputs.scope-id }}.json
+      run: pnpm exec tsx worker.ts
+      shell: bash
+      working-directory: ${{ github.action_path }}
+    - name: Upload worker result
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.worker-artifact-prefix }}-${{ inputs.scope-id }}
+        path: ${{ runner.temp }}/dead-domain-pinger-worker/${{ inputs.scope-id }}.json
+        if-no-files-found: error
+        compression-level: 9
