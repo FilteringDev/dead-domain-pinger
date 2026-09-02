@@ -14,6 +14,8 @@ Options:
   --scan-directories PATHS Newline-delimited workspace-relative directories eligible for probing and rewriting
   --file-extension EXT     Filter-list extension (default: .txt)
   --max-candidates COUNT   Maximum probe jobs (default: 50)
+  --urlfilter-prefetch-multiplier COUNT
+                           URL Filter candidates to consider per Globalping job (default: 100)
   --worker-count COUNT     Probe worker-thread count (default: os.cpus().length)
   --ordering-worker-count COUNT
                            Per-line Git history workers (default: os.availableParallelism())

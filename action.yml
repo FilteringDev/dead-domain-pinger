@@ -19,6 +19,10 @@ inputs:
     description: 'Maximum number of probe jobs to run in a single workflow run, including queued HTTP follow-ups'
     required: false
     default: '50'
+  urlfilter-prefetch-multiplier:
+    description: 'Number of Git-history-ordered candidates to prefilter with URL Filter per intended Globalping job'
+    required: false
+    default: '100'
   globalping-api-token:
     description: 'Required Globalping access token, e.g. secrets.GLOBALPING_API_TOKEN'
     required: true
@@ -163,6 +167,7 @@ runs:
         SCAN_DIRECTORIES: ${{ inputs.scan-directories }}
         FILE_EXTENSION: ${{ inputs.file-extension }}
         MAX_CANDIDATES: ${{ inputs.max-candidates }}
+        URLFILTER_PREFETCH_MULTIPLIER: ${{ inputs.urlfilter-prefetch-multiplier }}
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         STATE_DIRECTORY: ${{ inputs.state-directory }}
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite

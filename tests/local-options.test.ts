@@ -32,6 +32,7 @@ test('ParseLocalOptions accepts the pnpm separator and provides local defaults',
     ScanDirectories: '',
     FileExtension: '.txt',
     MaxCandidates: '50',
+    UrlFilterPrefetchMultiplier: '100',
     WorkerCount: '',
     OrderingWorkerCount: '',
     StatePath
@@ -48,6 +49,7 @@ test('ParseLocalOptions handles tuning flags', () => {
     '--scan-directories', 'filters/ads\nfilters/privacy',
     '--file-extension', '.list',
     '--max-candidates', '12',
+    '--urlfilter-prefetch-multiplier', '25',
     '--worker-count', '3',
     '--ordering-worker-count', '2',
     '--state-path', StatePath
@@ -58,6 +60,7 @@ test('ParseLocalOptions handles tuning flags', () => {
     ScanDirectories: 'filters/ads\nfilters/privacy',
     FileExtension: '.list',
     MaxCandidates: '12',
+    UrlFilterPrefetchMultiplier: '25',
     WorkerCount: '3',
     OrderingWorkerCount: '2',
     StatePath
@@ -79,6 +82,12 @@ test('ParseLocalOptions rejects missing paths, invalid counts and checkout-conta
     '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
     '--max-candidates', '0'
   ], Paths.RootDirectory)).toThrow('--max-candidates must be a positive integer')
+  expect(() => ParseLocalOptions([
+    '--workspace', Paths.WorkingDirectory,
+    '--output', Paths.OutputDirectory,
+    '--state-path', Path.join(Paths.RootDirectory, 'state.sqlite'),
+    '--urlfilter-prefetch-multiplier', '0'
+  ], Paths.RootDirectory)).toThrow('--urlfilter-prefetch-multiplier must be a positive integer')
   expect(() => ParseLocalOptions([
     '--workspace', Paths.WorkingDirectory,
     '--output', Paths.OutputDirectory,
@@ -113,6 +122,7 @@ test('ApplyLocalEnvironment forces preview mode and configures the state cache',
     expect(Process.env.GIT_OPTIONAL_LOCKS).toBe('0')
     expect(Process.env.ORDERING_WORKER_COUNT).toBe('')
     expect(Process.env.SCAN_DIRECTORIES).toBe('')
+    expect(Process.env.URLFILTER_PREFETCH_MULTIPLIER).toBe('100')
   } finally {
     for (const Name of Object.keys(Process.env)) {
       if (!(Name in PreviousEnvironment)) {

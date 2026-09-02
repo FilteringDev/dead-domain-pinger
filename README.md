@@ -1,7 +1,14 @@
 # dead-domain-pinger
 
-A GitHub composite action that probes the domains referenced by AdGuard-style filter list rules
-(via [Globalping](https://globalping.io)) and removes the ones that are dead.
+A GitHub composite action that prefilters domains referenced by AdGuard-style filter list rules
+with [AdGuard URL Filter](https://urlfilter.adtidy.org/), probes the remaining candidates via
+[Globalping](https://globalping.io), and removes the ones that are dead.
+
+Before creating Globalping measurements, the action sends Git-history-ordered candidates to the
+unauthenticated URL Filter `v2/checkDomains` API in large batches. Only domains whose registered
+domain was not used in AdGuard DNS during the last 24 hours are sent to Globalping. URL Filter is
+only a high-volume candidate selector: Globalping remains the sole authority for deletion. A failed
+URL Filter batch falls back to Globalping, so its availability cannot block a cleanup run.
 
 By default, a domain is judged dead when DNS resolution fails, when TLS certificate validation fails, or when
 it redirects to a known parking service or a different registrable domain. Known parking targets
@@ -34,6 +41,7 @@ left unchanged and do not enter the probe queue.
       filterslists/ads
       filterslists/privacy
     max-candidates: '50'
+    urlfilter-prefetch-multiplier: '100'
     state-directory: dead-domain-state
     state-artifact-name: dead-domain-pinger-state
     dry-run: 'false'
@@ -92,8 +100,8 @@ git apply /path/to/dead-domain-preview/dead-domain.diff
 An empty diff means no filter changes were proposed. The local runner requires a read-only
 SQLite snapshot through `--state-path`, so domain ages and queued HTTP follow-ups use the same
 persisted state as the workflow. It also accepts `--filter-root`, `--scan-directories`,
-`--file-extension`, `--max-candidates`, `--worker-count`, and `--ordering-worker-count`; run it
-with `--help` for the complete interface.
+`--file-extension`, `--max-candidates`, `--urlfilter-prefetch-multiplier`, `--worker-count`, and
+`--ordering-worker-count`; run it with `--help` for the complete interface.
 
 In GitHub Actions, setting `dry-run: 'true'` provides the same non-mutating preview. The report
 artifact contains both files, persisted state is not updated or uploaded, and `has_changes`
@@ -107,6 +115,7 @@ reports whether the preview diff is non-empty.
 | `scan-directories` | - | Newline-delimited workspace-relative directories. Only domains currently found in these directory subtrees are eligible for probing and rewriting; empty scans every file under `filter-root`. |
 | `file-extension` | `.txt` | File extension used by filter list files |
 | `max-candidates` | `50` | Maximum probe jobs to run in a single workflow run, including queued HTTP follow-ups |
+| `urlfilter-prefetch-multiplier` | `100` | Number of pending-first, Git-history-ordered candidates URL Filter considers per intended Globalping job. If fewer unused candidates are found, later candidates are considered until the Globalping job limit is reached. |
 | `state-directory` | `dead-domain-state` | Directory used to write state, report, and PR body files outside dry-run mode |
 | `state-artifact-name` | `dead-domain-pinger-state` | GitHub Actions artifact name used to carry the SQLite state database between runs |
 | `worker-count` | `os.cpus().length` | Number of Node.js worker threads used for selected-domain probes; when provided, it must be a positive integer |

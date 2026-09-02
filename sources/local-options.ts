@@ -13,6 +13,7 @@ export type LocalOptions = {
   ScanDirectories: string
   FileExtension: string
   MaxCandidates: string
+  UrlFilterPrefetchMultiplier: string
   WorkerCount: string
   OrderingWorkerCount: string
   StatePath: string
@@ -49,6 +50,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       'scan-directories': { type: 'string', default: '' },
       'file-extension': { type: 'string', default: '.txt' },
       'max-candidates': { type: 'string' },
+      'urlfilter-prefetch-multiplier': { type: 'string' },
       'worker-count': { type: 'string' },
       'ordering-worker-count': { type: 'string' },
       'state-path': { type: 'string' }
@@ -66,6 +68,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
       ScanDirectories: '',
       FileExtension: '.txt',
       MaxCandidates: String(DefaultMaxCandidates),
+      UrlFilterPrefetchMultiplier: '100',
       WorkerCount: '',
       OrderingWorkerCount: '',
       StatePath: ''
@@ -89,6 +92,7 @@ export function ParseLocalOptions(Arguments: string[], CurrentDirectory: string)
     ScanDirectories: Parsed.values['scan-directories'] ?? '',
     FileExtension: RequireOption(Parsed.values['file-extension'], '--file-extension'),
     MaxCandidates: ParsePositiveInteger(Parsed.values['max-candidates'], '--max-candidates', String(DefaultMaxCandidates)),
+    UrlFilterPrefetchMultiplier: ParsePositiveInteger(Parsed.values['urlfilter-prefetch-multiplier'], '--urlfilter-prefetch-multiplier', '100'),
     WorkerCount: Parsed.values['worker-count']
       ? ParsePositiveInteger(Parsed.values['worker-count'], '--worker-count', '')
       : '',
@@ -107,6 +111,7 @@ export function ApplyLocalEnvironment(Options: LocalOptions): void {
   Process.env.SCAN_DIRECTORIES = Options.ScanDirectories
   Process.env.FILE_EXTENSION = Options.FileExtension
   Process.env.MAX_CANDIDATES = Options.MaxCandidates
+  Process.env.URLFILTER_PREFETCH_MULTIPLIER = Options.UrlFilterPrefetchMultiplier
   Process.env.WORKER_COUNT = Options.WorkerCount
   Process.env.ORDERING_WORKER_COUNT = Options.OrderingWorkerCount
   Process.env.STATE_DIRECTORY = 'dead-domain-state'

@@ -3,7 +3,7 @@ import * as Fs from 'node:fs'
 import * as Path from 'node:path'
 import * as Process from 'node:process'
 import * as Zod from 'zod'
-import { BuildDomainCandidates, SelectProbeWork } from './sources/candidate-selection.ts'
+import { BuildDomainCandidates } from './sources/candidate-selection.ts'
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
 import { LoadGlobalpingConfig } from './sources/config.ts'
 import { IsShallowRepository } from './sources/domain-history.ts'
@@ -17,6 +17,7 @@ import { RewriteFilterContent, type DeadDomainsByOrigin } from './sources/rewrit
 import { FilterOccurrencesByScanDirectories } from './sources/scan-directories.ts'
 import { ClearPendingProbe, CreateEmptyState, LoadState, QueuePendingProbe, RecordVerdict, SaveState, StateFileName } from './sources/state.ts'
 import { DomainOrigins, type DomainOrigin, type RuleChange } from './sources/types.ts'
+import { SelectUrlFilteredProbeWork } from './sources/urlfilter-selection.ts'
 
 const Env = await Zod.object({
   DRY_RUN: Zod.string().default('false').transform(Value => Value === 'true'),
@@ -29,6 +30,7 @@ const Env = await Zod.object({
   SQLITE_STATE_PATH: Zod.string().nonempty().optional(),
   GLOBALPING_API_TOKEN: Zod.string().min(1, 'GLOBALPING_API_TOKEN is required'),
   MAX_CANDIDATES: Zod.string().default(String(DefaultMaxCandidates)).transform(Value => Number(Value)),
+  URLFILTER_PREFETCH_MULTIPLIER: Zod.string().default('100').transform(Value => Number(Value)),
   ORDERING_WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultOrderingWorkerCount() : Number(Value)),
   WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
 }).strip()
@@ -36,6 +38,10 @@ const Env = await Zod.object({
     if (!Number.isInteger(Value.MAX_CANDIDATES) || Value.MAX_CANDIDATES <= 0) {
       Context.addIssue({ code: 'custom', path: ['MAX_CANDIDATES'], message: 'MAX_CANDIDATES must be a positive integer' })
       return
+    }
+
+    if (!Number.isInteger(Value.URLFILTER_PREFETCH_MULTIPLIER) || Value.URLFILTER_PREFETCH_MULTIPLIER <= 0) {
+      Context.addIssue({ code: 'custom', path: ['URLFILTER_PREFETCH_MULTIPLIER'], message: 'URLFILTER_PREFETCH_MULTIPLIER must be a positive integer' })
     }
 
     if (!Number.isInteger(Value.WORKER_COUNT) || Value.WORKER_COUNT <= 0) {
@@ -99,7 +105,14 @@ const Candidates = await BuildDomainCandidates({
   OnOrderingWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
 })
 Core.info(`[dead-domain-pinger] Ordered domains from Git history with up to ${Env.ORDERING_WORKER_COUNT} workers`)
-const SelectedWork = SelectProbeWork(Candidates, State, Env.MAX_CANDIDATES)
+const { WorkItems: SelectedWork, ConsideredCount, UrlFilterSelectedCount, FallbackCount } = await SelectUrlFilteredProbeWork({
+  Candidates,
+  State,
+  MaxCandidates: Env.MAX_CANDIDATES,
+  PrefetchMultiplier: Env.URLFILTER_PREFETCH_MULTIPLIER,
+  OnWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
+})
+Core.info(`[dead-domain-pinger] URL Filter considered ${ConsideredCount} jobs; selected ${UrlFilterSelectedCount} unused domains and used fallback for ${FallbackCount} jobs`)
 Core.info(`[dead-domain-pinger] Selected ${SelectedWork.length} probe jobs with ${Env.WORKER_COUNT} workers (limit ${GlobalpingConfig.Limit} per measurement)`)
 
 const { ProbeResults, ProbeFailedDomains, RateLimited, RateLimitMessage } = await ProbeDomainsWithWorkers({
