@@ -4,7 +4,9 @@ import { DomainOrigins, type DomainCandidate, type DomainOccurrence } from './ty
 import { GetLastCheckedAt, GetModifiedAtOverride, type DeadDomainState, type GitOrderCacheEntry } from './state.ts'
 import { ParseScanDirectories } from './scan-directories.ts'
 
-export const WorkerArtifactVersion = 1
+export const WorkerArtifactVersion = 2
+
+const CommitShaSchema = Zod.string().regex(/^[0-9a-f]{40}$/u)
 
 const DomainOriginSchema = Zod.enum(DomainOrigins)
 const DomainOccurrenceSchema = Zod.object({
@@ -35,6 +37,7 @@ const GitOrderCacheEntrySchema = Zod.object({
 export const WorkerArtifactSchema = Zod.object({
   Version: Zod.literal(WorkerArtifactVersion),
   ScopeId: Zod.string().regex(/^[a-z0-9][a-z0-9-]*$/u),
+  CommitSha: CommitShaSchema,
   Candidates: Zod.array(DomainCandidateSchema),
   GitOrderCache: Zod.array(GitOrderCacheEntrySchema),
   ConsideredCount: Zod.number().int().nonnegative(),
@@ -68,6 +71,16 @@ export function AssertWorkerArtifactPaths(WorkingDirectory: string, Artifact: Wo
     if (!IsWithinWorkspace(WorkingDirectory, Entry.FilePath)) {
       throw new Error(`Worker artifact ${Artifact.ScopeId} contains a cache entry outside the workspace: ${Entry.FilePath}`)
     }
+  }
+}
+
+/** Rejects worker results indexed from a different tree than the one postprocess would rewrite. */
+export function AssertWorkerArtifactCommits(ExpectedCommitSha: string, Artifacts: WorkerArtifact[]): void {
+  const Expected = CommitShaSchema.parse(ExpectedCommitSha)
+  const Mismatched = Artifacts.filter(Artifact => Artifact.CommitSha !== Expected)
+  if (Mismatched.length > 0) {
+    const Details = Mismatched.map(Artifact => `${Artifact.ScopeId}=${Artifact.CommitSha}`).join(', ')
+    throw new Error(`Worker artifacts were indexed at a different commit than ${Expected}: ${Details}. Pin every job to the matrix-build commit_sha output.`)
   }
 }
 

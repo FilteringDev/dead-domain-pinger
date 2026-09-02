@@ -6,10 +6,11 @@ import * as Zod from 'zod'
 import { BuildDomainCandidates } from './sources/candidate-selection.ts'
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
 import { LoadGlobalpingConfig } from './sources/config.ts'
+import { GetHeadRevision } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
 import { GetDefaultOrderingWorkerCount } from './sources/ordering-pool.ts'
 import { ParseScanDirectories } from './sources/scan-directories.ts'
-import { WorkerArtifactSchema } from './sources/stage-artifacts.ts'
+import { WorkerArtifactSchema, WorkerArtifactVersion } from './sources/stage-artifacts.ts'
 import { CreateEmptyState, LoadState } from './sources/state.ts'
 import { SelectUrlFilteredProbeWork } from './sources/urlfilter-selection.ts'
 
@@ -66,9 +67,15 @@ const Selected = await SelectUrlFilteredProbeWork({
   OnWarning: Message => Core.warning(`[dead-domain-pinger] ${Message}`)
 })
 const CandidateByDomain = new Map(Candidates.map(Candidate => [Candidate.Domain, Candidate]))
+const CommitSha = await GetHeadRevision(WorkingDirectory)
+if (!CommitSha) {
+  throw new Error('Could not resolve the checked-out commit; the worker must run on a Git checkout')
+}
+
 const Artifact = WorkerArtifactSchema.parse({
-  Version: 1,
+  Version: WorkerArtifactVersion,
   ScopeId: Env.SCOPE_ID,
+  CommitSha,
   Candidates: Selected.WorkItems.map(Work => CandidateByDomain.get(Work.SourceDomain)).filter(Candidate => Candidate !== undefined),
   GitOrderCache: State.GitOrderCache.filter(Entry => !CacheBeforeOrdering.has(`${Entry.FilePath}\u0000${Entry.Revision}\u0000${Entry.LineNumber}\u0000${Entry.Domain}`)),
   ConsideredCount: Selected.ConsideredCount,

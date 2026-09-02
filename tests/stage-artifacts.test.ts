@@ -1,12 +1,15 @@
 import { expect, test } from 'vitest'
-import { AssertWorkerArtifactPaths, BuildMatrixEntries, MergeGitOrderCache, MergeWorkerArtifacts, WorkerArtifactSchema } from '../sources/stage-artifacts.ts'
+import { AssertWorkerArtifactCommits, AssertWorkerArtifactPaths, BuildMatrixEntries, MergeGitOrderCache, MergeWorkerArtifacts, WorkerArtifactSchema, WorkerArtifactVersion } from '../sources/stage-artifacts.ts'
 import { CreateEmptyState, RecordVerdict } from '../sources/state.ts'
 import type { WorkerArtifact } from '../sources/stage-artifacts.ts'
 
+const HeadCommitSha = 'a'.repeat(40)
+
 function Artifact(Overrides: Partial<WorkerArtifact> = {}): WorkerArtifact {
   return {
-    Version: 1,
+    Version: WorkerArtifactVersion,
     ScopeId: 'filters-1',
+    CommitSha: HeadCommitSha,
     Candidates: [{
       Domain: 'old.example',
       LatestModifiedAt: 100,
@@ -33,8 +36,21 @@ test('BuildMatrixEntries removes nested scopes and creates stable entries', () =
 })
 
 test('worker artifacts reject unknown fields and incompatible versions', () => {
-  expect(() => WorkerArtifactSchema.parse({ ...Artifact(), Version: 2 })).toThrow()
+  expect(() => WorkerArtifactSchema.parse({ ...Artifact(), Version: 1 })).toThrow()
   expect(() => WorkerArtifactSchema.parse({ ...Artifact(), Unexpected: true })).toThrow()
+})
+
+test('worker artifacts require a full commit hash of the tree they indexed', () => {
+  expect(() => WorkerArtifactSchema.parse({ ...Artifact(), CommitSha: 'abc1234' })).toThrow()
+  const WithoutCommitSha: Record<string, unknown> = { ...Artifact() }
+  delete WithoutCommitSha.CommitSha
+  expect(() => WorkerArtifactSchema.parse(WithoutCommitSha)).toThrow()
+})
+
+test('postprocess rejects worker artifacts indexed at another commit', () => {
+  const Stale = Artifact({ ScopeId: 'lists-2', CommitSha: 'b'.repeat(40) })
+  expect(() => AssertWorkerArtifactCommits(HeadCommitSha, [Artifact(), Stale])).toThrow('lists-2=' + 'b'.repeat(40))
+  expect(() => AssertWorkerArtifactCommits(HeadCommitSha, [Artifact(), Artifact({ ScopeId: 'lists-2' })])).not.toThrow()
 })
 
 test('worker artifacts cannot direct postprocess outside the workspace', () => {

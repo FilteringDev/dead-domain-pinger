@@ -24,6 +24,10 @@ inputs:
   expected-worker-count:
     description: 'Number emitted by matrix-build'
     required: true
+  expected-commit-sha:
+    description: 'Commit emitted by matrix-build; when set, postprocess fails unless its own checkout matches'
+    required: false
+    default: ''
   worker-artifact-prefix:
     description: 'Worker result artifact prefix'
     required: false
@@ -88,6 +92,7 @@ runs:
         GLOBALPING_API_TOKEN: ${{ inputs.globalping-api-token }}
         WORKER_COUNT: ${{ inputs.worker-count }}
         EXPECTED_WORKER_COUNT: ${{ inputs.expected-worker-count }}
+        EXPECTED_COMMIT_SHA: ${{ inputs.expected-commit-sha }}
         WORKER_ARTIFACT_DIRECTORY: ${{ runner.temp }}/dead-domain-pinger-workers
         STATE_DIRECTORY: ${{ inputs.state-directory }}
         SQLITE_STATE_PATH: ${{ runner.temp }}/dead-domain-pinger-state/dead-domain-state.sqlite

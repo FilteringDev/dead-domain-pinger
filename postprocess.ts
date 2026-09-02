@@ -6,13 +6,14 @@ import * as Zod from 'zod'
 import { SelectProbeWork } from './sources/candidate-selection.ts'
 import { CollectDomainOccurrences } from './sources/collect-domains.ts'
 import { LoadGlobalpingConfig } from './sources/config.ts'
+import { GetHeadRevision } from './sources/domain-history.ts'
 import { ListFilterFiles } from './sources/filter-files.ts'
 import { DefaultMaxCandidates } from './sources/globalping.ts'
 import { BuildGitDiff, DiffFileName, ResolvePreviewOutputDirectory, WritePreviewArtifacts, type PreviewFileChange } from './sources/preview.ts'
 import { GetDefaultWorkerCount, ProbeDomainsWithWorkers } from './sources/probe-pool.ts'
 import { BuildPullRequestBody, BuildReportMarkdown, PullRequestBodyFileName, ReportFileName, type ReportInput } from './sources/report.ts'
 import { RewriteFilterContent, type DeadDomainsByOrigin } from './sources/rewrite-filters.ts'
-import { AssertWorkerArtifactPaths, MergeGitOrderCache, MergeWorkerArtifacts, WorkerArtifactSchema, type WorkerArtifact } from './sources/stage-artifacts.ts'
+import { AssertWorkerArtifactCommits, AssertWorkerArtifactPaths, MergeGitOrderCache, MergeWorkerArtifacts, WorkerArtifactSchema, type WorkerArtifact } from './sources/stage-artifacts.ts'
 import { ClearPendingProbe, LoadState, QueuePendingProbe, RecordVerdict, SaveState } from './sources/state.ts'
 import { DomainOrigins, type DomainOrigin, type RuleChange } from './sources/types.ts'
 
@@ -25,6 +26,7 @@ const Env = Zod.object({
   SQLITE_STATE_PATH: Zod.string().nonempty(),
   WORKER_ARTIFACT_DIRECTORY: Zod.string().nonempty(),
   EXPECTED_WORKER_COUNT: Zod.string().transform(Number),
+  EXPECTED_COMMIT_SHA: Zod.string().default(''),
   GLOBALPING_API_TOKEN: Zod.string().min(1, 'GLOBALPING_API_TOKEN is required'),
   MAX_CANDIDATES: Zod.string().default(String(DefaultMaxCandidates)).transform(Number),
   WORKER_COUNT: Zod.string().default('').transform(Value => Value === '' ? GetDefaultWorkerCount() : Number(Value))
@@ -59,13 +61,14 @@ function ListArtifactFiles(Directory: string): string[] {
   return Files.sort((Left, Right) => Left.localeCompare(Right))
 }
 
-function LoadWorkerArtifacts(WorkingDirectory: string, Directory: string, ExpectedCount: number): WorkerArtifact[] {
+function LoadWorkerArtifacts(WorkingDirectory: string, Directory: string, ExpectedCount: number, CommitSha: string): WorkerArtifact[] {
   const Artifacts = ListArtifactFiles(Directory).map(FilePath => WorkerArtifactSchema.parse(JSON.parse(Fs.readFileSync(FilePath, 'utf-8'))))
   const ScopeIds = new Set(Artifacts.map(Artifact => Artifact.ScopeId))
   if (Artifacts.length !== ExpectedCount || ScopeIds.size !== ExpectedCount) {
     throw new Error(`Expected ${ExpectedCount} unique worker artifacts but found ${Artifacts.length} files for ${ScopeIds.size} scopes`)
   }
   Artifacts.forEach(Artifact => AssertWorkerArtifactPaths(WorkingDirectory, Artifact))
+  AssertWorkerArtifactCommits(CommitSha, Artifacts)
   return Artifacts
 }
 
@@ -74,7 +77,14 @@ const StateDirectory = Path.resolve(WorkingDirectory, Env.STATE_DIRECTORY)
 const PreviewOutputDirectory = Env.DRY_RUN ? ResolvePreviewOutputDirectory(WorkingDirectory, Env.PREVIEW_OUTPUT_DIRECTORY) : null
 const CheckedAt = Math.floor(Date.now() / 1000)
 const GlobalpingConfig = LoadGlobalpingConfig(WorkingDirectory)
-const Artifacts = LoadWorkerArtifacts(WorkingDirectory, Env.WORKER_ARTIFACT_DIRECTORY, Env.EXPECTED_WORKER_COUNT)
+const CommitSha = await GetHeadRevision(WorkingDirectory)
+if (!CommitSha) {
+  throw new Error('Could not resolve the checked-out commit; postprocess must run on a Git checkout')
+}
+if (Env.EXPECTED_COMMIT_SHA && Env.EXPECTED_COMMIT_SHA !== CommitSha) {
+  throw new Error(`Postprocess checked out ${CommitSha} but the workers were pinned to ${Env.EXPECTED_COMMIT_SHA}`)
+}
+const Artifacts = LoadWorkerArtifacts(WorkingDirectory, Env.WORKER_ARTIFACT_DIRECTORY, Env.EXPECTED_WORKER_COUNT, CommitSha)
 const State = await LoadState(Env.SQLITE_STATE_PATH, GlobalpingConfig.JudgementPreferences.Fingerprint)
 State.GitOrderCache = MergeGitOrderCache(Artifacts, State.GitOrderCache)
 const Candidates = MergeWorkerArtifacts(Artifacts, State)

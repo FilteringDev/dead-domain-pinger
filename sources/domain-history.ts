@@ -179,6 +179,22 @@ async function RunGitRecords(
   return { Succeeded: true, Message: '' }
 }
 
+/** Returns the checked-out commit, or null when the workspace has no resolvable HEAD. */
+export async function GetHeadRevision(WorkingDirectory: string): Promise<string | null> {
+  let Revision = ''
+  const Outcome = await RunGitRecords(
+    WorkingDirectory,
+    ['rev-parse', 'HEAD'],
+    '\n',
+    Line => {
+      Revision = Line.trim()
+      return false
+    }
+  )
+
+  return Outcome.Succeeded && /^[0-9a-f]{40}$/u.test(Revision) ? Revision : null
+}
+
 /** Returns the last commit that changed a clean, tracked file, or null when it cannot be cached. */
 export async function GetFileHistoryRevision(WorkingDirectory: string, FilePath: string): Promise<string | null> {
   let Status = ''

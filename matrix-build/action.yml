@@ -14,6 +14,9 @@ outputs:
   worker_count:
     description: 'Number of worker scopes'
     value: ${{ steps.build.outputs.worker_count }}
+  commit_sha:
+    description: 'Checked-out commit that every later stage must use as its checkout ref'
+    value: ${{ steps.build.outputs.commit_sha }}
 
 runs:
   using: 'composite'

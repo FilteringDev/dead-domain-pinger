@@ -106,6 +106,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       worker_count: ${{ steps.matrix.outputs.worker_count }}
+      commit_sha: ${{ steps.matrix.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v7
       - id: matrix
@@ -125,6 +126,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.matrix-build.outputs.commit_sha }}
           fetch-depth: 0
       - uses: FilteringDev/dead-domain-pinger/worker@VERSION
         with:
@@ -138,12 +140,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.matrix-build.outputs.commit_sha }}
       - uses: FilteringDev/dead-domain-pinger/postprocess@VERSION
         with:
           filter-root: .
           max-candidates: '50'
           globalping-api-token: ${{ secrets.GLOBALPING_API_TOKEN }}
           expected-worker-count: ${{ needs.matrix-build.outputs.worker_count }}
+          expected-commit-sha: ${{ needs.matrix-build.outputs.commit_sha }}
           worker-artifact-prefix: dead-domain-worker
           state-artifact-name: dead-domain-pinger-state
           report-artifact-name: dead-domain-pinger-report
@@ -154,6 +159,13 @@ file cannot be handled by two workers. When the input is empty it emits one `.` 
 `worker` uploads exactly one versioned JSON artifact named
 `<worker-artifact-prefix>-<scope-id>`; it contains only Git-history and URL Filter candidate
 data, never credentials or Globalping verdicts.
+
+Every job must observe the same tree. `matrix-build` publishes the commit it checked out as its
+`commit_sha` output; use it as the `ref` of every later `actions/checkout` so a push during the
+run cannot make workers index one revision while `postprocess` rewrites another. Each worker
+artifact records that commit, and `postprocess` fails instead of rewriting filters when an
+artifact was indexed elsewhere. Setting `expected-commit-sha` additionally verifies the
+`postprocess` checkout itself.
 
 `postprocess` must run after every worker and use the matching artifact prefix plus
 `expected-worker-count`. It fails when a result is missing or duplicated rather than rewriting
