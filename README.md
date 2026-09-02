@@ -96,13 +96,11 @@ name: Dead domain cleanup
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   matrix-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       worker_count: ${{ steps.matrix.outputs.worker_count }}
@@ -120,6 +118,8 @@ jobs:
   worker:
     needs: matrix-build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix-build.outputs.matrix) }}
@@ -138,6 +138,9 @@ jobs:
   postprocess:
     needs: [matrix-build, worker]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
